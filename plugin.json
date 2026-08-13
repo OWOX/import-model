@@ -1,0 +1,8 @@
+{
+  "name": "Import Model",
+  "description": "Import public OKF bundles into OWOX Data Marts and create their schemas and relationships.",
+  "delivery": {
+    "type": "remote",
+    "url": "https://owox.github.io/import-model/"
+  }
+}

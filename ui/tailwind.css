@@ -1,0 +1,111 @@
+/* Tailwind SOURCE — precompiled to ui/styles.css via `npm run build:css`.
+   The OWOX host runs Tailwind on install, but only with the DEFAULT theme — it does NOT load our
+   tailwind.config, so our custom OWOX tokens (bg-background, text-foreground, …) won't compile there.
+   So we precompile: the host bundles the committed ui/styles.css as-is (AGENTS.md §7.1). Edit THIS
+   file, run build:css, and commit both. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens replicated from the OWOX design system
+   (upstream/packages/ui/src/styles/globals.css). The sandboxed plugin iframe
+   can't import @owox/ui, so we mirror the semantic tokens + dm-* classes here
+   and follow docs/DESIGN.md. Never hardcode colors in components — use tokens. */
+@layer base {
+  :root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.3346 0.0123 279.25);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.3346 0.0123 279.25);
+    --primary: oklch(0.6179 0.2295 250.87);
+    --primary-hover: oklch(0.54 0.23 250.87);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.5148 0.0128 274.72);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    --background: oklch(0.205 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.145 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.6179 0.2295 250.87);
+    --primary-hover: oklch(0.54 0.23 250.87);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.269 0 0);
+    --input: oklch(0.269 0 0);
+    --ring: oklch(0.556 0 0);
+  }
+
+  * {
+    border-color: var(--border);
+  }
+  body {
+    /* No background: let the host's rounded content panel show through the
+       iframe corners (the iframe is transparent). ponytail: bg lived on body
+       and squared off the host's rounded corners. */
+    @apply text-foreground;
+  }
+}
+
+/* Custom utility classes from the design system (dm- prefix). */
+/* OWOX host page chrome — EXPLICIT values (AGENTS.md §7.1, copied from
+   packages/plugin-starter/ui/styles.css). The host compiles plugin CSS with the DEFAULT
+   Tailwind theme, where `rounded-md` = 6px and tokens like `muted` don't exist — so the card
+   radius/fill are written literally (8px corner, gray-200 bottom border, muted/50 fill) so the
+   corner + color match the host app instead of rendering a 6px "slightly different" corner.
+   Kept in @layer components so utilities (e.g. p-0 on the table card) still override. */
+@layer components {
+  .dm-page {
+    min-height: 100%;
+  }
+  .dm-page-header {
+    padding: 1rem 2rem;
+  }
+  .dm-page-header-title {
+    font-size: 1.25rem;
+    line-height: 1.75rem;
+    font-weight: 500;
+  }
+  .dm-page-content {
+    padding-inline: 1rem;
+  }
+  .dm-card {
+    padding: 1rem;
+    border-radius: 8px; /* host --radius (0.625rem) − 2px; NOT default rounded-md (6px) */
+    border-bottom: 1px solid #e5e7eb; /* gray-200; a single bottom border, not a full box */
+    background-color: color-mix(in oklch, oklch(0.97 0 0) 50%, transparent); /* ≈ muted/50 */
+  }
+  .dark .dm-card {
+    border-bottom-color: rgba(255, 255, 255, 0.04);
+    background-color: rgba(255, 255, 255, 0.04);
+  }
+  @media (min-width: 768px) {
+    .dm-page-header {
+      padding: 1.5rem 3rem;
+    }
+    .dm-page-header-title {
+      font-size: 1.5rem;
+      line-height: 2rem;
+    }
+    .dm-page-content {
+      padding-inline: 3rem;
+    }
+  }
+}
