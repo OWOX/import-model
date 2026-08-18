@@ -35,6 +35,30 @@ Requests through `ctx.owox` time out after 30 seconds, with at most 32 concurren
 
 Styles are not inherited from the host. Keep CSS in `ui/tailwind.css` (compiled to `ui/styles.css` by `npm run build:css`) and honor `ctx.theme` for dark mode.
 
+## Local development
+
+Two loops, for two different questions.
+
+**UI iteration — `npm run dev`.** `vite.config.ts` aliases `@owox/plugin-sdk`
+to `ui/sdk-mock.ts` in `serve` mode only, so the app runs as a standalone page
+against the mock. Use this for layout, wizard flow, and parsing work. It proves
+nothing about the real host handshake or real `ctx.owox` responses.
+
+**Verification against a real host.** There is no local dev harness on the
+platform side yet: a plugin only runs inside the ODM iframe, and `delivery.url`
+must be public HTTPS — `localhost` is rejected. Loading the dev server directly
+in a tab against the real SDK gives *"This page is not running inside an OWOX
+plugin frame"*, which is expected. The loop is: expose `npm run dev` on a stable
+public HTTPS tunnel, point a separate debug-manifest repo's `delivery.url` at it,
+publish that with `--scope member`, install, then edit locally and refresh the
+frame. Vite needs `server.allowedHosts` to include the tunnel host and
+`server.cors: true` (the iframe's opaque origin makes even our own bundle a
+cross-origin fetch). Debug via Chrome DevTools with the plugin iframe selected
+as the JS context. See the workspace `CLAUDE.md` for the full procedure.
+
+Never point this repo's `plugin.json` at a tunnel URL — `delivery.url` here
+stays the GitHub Pages URL. The tunnel lives in the throwaway debug repo.
+
 ## Working rules
 
 - Write commit messages, PR titles, PR descriptions, and code comments in English.
