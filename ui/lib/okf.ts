@@ -1,4 +1,4 @@
-import type { ModelGraph, ModelNode, ModelEdge, InputSource, Cardinality, SchemaField } from "./okf-types";
+import type { ModelGraph, ModelNode, ModelEdge, InputSource, Cardinality, SchemaField, JoinNode } from "./okf-types";
 import { parseFrontmatter } from "./frontmatter";
 import { normalizeFieldType } from "./field-type";
 
@@ -36,28 +36,64 @@ export function parseBundle(files: Record<string, string>): ModelGraph {
     });
   }
 
-  const raw: { from: string; to: string; keys: { left: string; right: string }[]; cardinality?: Cardinality }[] = [];
+  const raw: {
+    from: string; to: string; keys: { left: string; right: string }[];
+    cardinality?: Cardinality; description?: string; targetLabel?: string;
+  }[] = [];
+  const joinNodesByKey = new Map<string, JoinNode[]>();
   for (const [path, text] of docs) {
     const { data, body } = parseFrontmatter(text);
     const fromSlug = path.split("/").pop()!.replace(/\.md$/, "");
     const fromKey = (data.owox && data.owox.key) || fromSlug;
     const fromSchema = parseSchema(body);
+    // An indented bullet is a join NODE, and its parent chain is its path — so the tree the
+    // bundle draws IS the path, and no path string has to be written anywhere. `chain` holds
+    // the parents in scope; a top-level bullet resets it.
+    let chain: { indent: number; path: string[] }[] = [];
     for (const ln of body.split("\n")) {
-      const m = ln.match(/^- \[.*?\]\(\.\/(.+?)\.md\)\s*(?:—|--)?\s*(.*)$/);
-      if (!m) continue;
-      const toKey = slugToKey.get(basename(m[1])); if (!toKey) continue;
-      let keys = [...m[2].matchAll(/`([^`]+?)\s*=\s*([^`]+?)`/g)].map(g => ({ left: g[1].trim(), right: g[2].trim() }));
-      if (keys.length === 0) {
-        // Faithful-OWOX join: recover from a `FK to [Target]` note + target PK.
-        const targetTitle = nodes.find(n => n.key === toKey)?.title ?? "";
-        const fkCol = fromSchema.find(f => (f.description || "").includes(`FK to [${targetTitle}]`));
-        const rightPk = pkByKey.get(toKey);
-        if (fkCol && rightPk) keys = [{ left: fkCol.name, right: rightPk }];
+      const m = ln.match(/^- \[(.*?)\]\(\.\/(.+?)\.md\)\s*(?:—|--)?\s*(.*)$/);
+      if (m) {
+        const toKey = slugToKey.get(basename(m[2]));
+        chain = [];
+        if (!toKey) continue;
+        let keys = [...m[3].matchAll(/`([^`]+?)\s*=\s*([^`]+?)`/g)].map(g => ({ left: g[1].trim(), right: g[2].trim() }));
+        if (keys.length === 0) {
+          // Faithful-OWOX join: recover from a `FK to [Target]` note + target PK.
+          const targetTitle = nodes.find(n => n.key === toKey)?.title ?? "";
+          const fkCol = fromSchema.find(f => (f.description || "").includes(`FK to [${targetTitle}]`));
+          const rightPk = pkByKey.get(toKey);
+          if (fkCol && rightPk) keys = [{ left: fkCol.name, right: rightPk }];
+        }
+        const cm = m[3].match(/\[(1:1|1:N|N:1|N:N)\]/);
+        const cardinality = cm ? (cm[1] as Cardinality) : undefined;
+        raw.push({
+          from: fromKey, to: toKey, keys, cardinality,
+          description: joinDescription(m[3]) || undefined,
+          targetLabel: m[1].trim() || undefined,
+        });
+        chain = [{ indent: 0, path: [toKey] }];
+        continue;
       }
-      const cm = m[2].match(/\[(1:1|1:N|N:1|N:N)\]/);
-      const cardinality = cm ? (cm[1] as Cardinality) : undefined;
-      raw.push({ from: fromKey, to: toKey, keys, cardinality });
+      const nested = ln.match(/^(\s+)- \[(.*?)\]\(\.\/(.+?)\.md\)\s*(?:—|--)?\s*(.*)$/);
+      if (!nested || chain.length === 0) continue;
+      const toKey = slugToKey.get(basename(nested[3])); if (!toKey) continue;
+      const indent = nested[1].length;
+      while (chain.length > 1 && chain[chain.length - 1].indent >= indent) chain.pop();
+      const nodePath = [...chain[chain.length - 1].path, toKey];
+      chain.push({ indent, path: nodePath });
+      const list = joinNodesByKey.get(fromKey) ?? [];
+      list.push({
+        path: nodePath,
+        targetKey: toKey,
+        alias: nested[2].trim(),
+        description: joinDescription(nested[4]) || undefined,
+      });
+      joinNodesByKey.set(fromKey, list);
     }
+  }
+  for (const node of nodes) {
+    const found = joinNodesByKey.get(node.key);
+    if (found && found.length) node.joinNodes = found;
   }
 
   // Tolerant pass for Google OKF v0.1 prose joins, e.g.
@@ -108,14 +144,46 @@ export function parseBundle(files: Record<string, string>): ModelGraph {
       if (!ex.cardinality && r.cardinality) {
         ex.cardinality = ex.from === r.from ? r.cardinality : FLIP_CARDINALITY[r.cardinality];
       }
+      // Each direction of a bidirectional edge becomes its own ODM relationship, and the
+      // bundle describes each from its own side — so the mirrored sentence is kept rather
+      // than collapsed into the first one.
+      if (r.description && ex.from === r.to && !ex.reverseDescription) ex.reverseDescription = r.description;
       continue;
     }
     const e: ModelEdge = { id: `e${edges.length + 1}`, from: r.from, to: r.to, keys: r.keys, bidirectional: false };
     if (r.cardinality) e.cardinality = r.cardinality;
+    if (r.description) e.description = r.description;
+    // Only a label the bundle wrote by hand: one that merely repeats the mart's title says
+    // nothing ODM would not show anyway.
+    if (r.targetLabel && r.targetLabel !== (nodes.find(n => n.key === r.to)?.title ?? "")) {
+      e.targetLabel = r.targetLabel;
+    }
     seen.set(pairKey, e); edges.push(e);
   }
   const storageId = (docs[0] && (parseFrontmatter(docs[0][1]).data.owox || {}).storageId) || null;
   return { storageId, nodes, edges };
+}
+
+const JOIN_KEY_RE = /`([^`]+?)\s*=\s*([^`]+?)`/g;
+const CARDINALITY_RE = /\[(?:1:1|1:N|N:1|N:N)\]/g;
+const JOIN_SEPARATORS = /^[\s,\u2014\u2013-]+|[\s,\u2014\u2013-]+$/g;
+
+/**
+ * What a join line says beyond its structure: everything after its LAST marker.
+ *
+ * Reading the tail rather than subtracting the markers keeps two things true at once. The
+ * sentence may contain anything — an em dash, the word "and" — because it is never
+ * word-filtered; and the glue BETWEEN markers is never mistaken for meaning, which matters
+ * for a composite join written `a = a` AND `b = b`.
+ */
+function joinDescription(rest: string): string {
+  let end = 0;
+  for (const re of [JOIN_KEY_RE, CARDINALITY_RE]) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(rest))) end = Math.max(end, m.index + m[0].length);
+  }
+  return rest.slice(end).replace(JOIN_SEPARATORS, "").trim();
 }
 
 function inferSource(tags: unknown): InputSource | undefined {

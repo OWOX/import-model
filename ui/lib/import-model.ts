@@ -8,7 +8,7 @@ export interface StorageRef {
 }
 
 export interface ImportProgress {
-  phase: 'marts' | 'relationships';
+  phase: 'marts' | 'relationships' | 'joins';
   completed: number;
   total: number;
   label: string;
@@ -21,6 +21,8 @@ export interface ImportResult {
   relationshipsCreated: number;
   relationshipsFailed: number;
   relationshipsWithoutKeys: number;
+  joinsNamed: number;
+  joinsFailed: number;
   errors: string[];
 }
 
@@ -72,6 +74,8 @@ export async function importModel(
     relationshipsCreated: 0,
     relationshipsFailed: 0,
     relationshipsWithoutKeys: 0,
+    joinsNamed: 0,
+    joinsFailed: 0,
     errors: [],
   };
   const idByKey = new Map<string, string>();
@@ -155,6 +159,10 @@ export async function importModel(
             sourceFieldName: key.left,
             targetFieldName: key.right,
           })),
+          // The one thing the join keys cannot say: what the edge means. ODM hands this to
+          // an assistant alongside the keys, so a bundle that explains its edges keeps
+          // explaining them after the import.
+          ...(edge.description ? { description: edge.description } : {}),
         },
       );
       result.relationshipsCreated += 1;
@@ -171,7 +179,84 @@ export async function importModel(
     total: relationships.length,
     label: 'Done',
   });
+
+  await writeJoinConfigs(context, preparedGraph, idByKey, titleByKey, result, options);
   return result;
+}
+
+/**
+ * Name the joins the way the bundle names them.
+ *
+ * A relationship gets ODM a join tree; what it does not get is a readable one. The
+ * reporting column picker is a flat list, so a mart that reaches Account directly and again
+ * through Subscription shows two sources called "Account". The bundle already resolved that
+ * — nested bullets carry a label per node ("Subscription Account") and a sentence written
+ * from the reaching mart's side — and both live on `blendedFieldsConfig.sources[]`, keyed by
+ * the dotted path of relationship aliases.
+ *
+ * The paths are OURS to compute: they are made of the `targetAlias` values this import just
+ * assigned, which is why the bundle keys its nodes by mart instead of by a path string that
+ * would go stale. Only the sources named here are written; ODM computes the rest from the
+ * relationships and treats an unlisted source as included, so nothing is taken away.
+ */
+async function writeJoinConfigs(
+  context: PluginContext,
+  graph: ModelGraph,
+  idByKey: Map<string, string>,
+  titleByKey: Map<string, string>,
+  result: ImportResult,
+  options: ImportOptions,
+): Promise<void> {
+  const pending = graph.nodes
+    .map(node => ({ node, sources: joinSourcesFor(node, graph, titleByKey) }))
+    .filter(entry => entry.sources.length > 0);
+  if (pending.length === 0) return;
+
+  for (let index = 0; index < pending.length; index += 1) {
+    const { node, sources } = pending[index];
+    options.onProgress?.({
+      phase: 'joins',
+      completed: index,
+      total: pending.length,
+      label: node.title,
+    });
+    const martId = idByKey.get(node.key);
+    if (!martId) continue;
+    try {
+      await context.owox.putJson(
+        `/api/data-marts/${encodeURIComponent(martId)}/blended-fields-config`,
+        { blendedFieldsConfig: { sources } },
+      );
+      result.joinsNamed += sources.length;
+    } catch (error) {
+      result.joinsFailed += sources.length;
+      result.errors.push(`Join names for “${node.title}”: ${errorMessage(error)}`);
+    }
+  }
+
+  options.onProgress?.({ phase: 'joins', completed: pending.length, total: pending.length, label: 'Done' });
+}
+
+/** The blended sources one mart needs: its hand-written direct labels, then its join nodes. */
+export function joinSourcesFor(
+  node: ModelNode,
+  graph: ModelGraph,
+  titleByKey: Map<string, string>,
+): Array<{ path: string; alias: string; description?: string }> {
+  const segment = (key: string) => relationshipAlias(titleByKey.get(key) ?? key, key);
+  const sources: Array<{ path: string; alias: string; description?: string }> = [];
+  for (const edge of graph.edges) {
+    if (edge.from !== node.key || !edge.targetLabel) continue;
+    sources.push({ path: segment(edge.to), alias: edge.targetLabel });
+  }
+  for (const joinNode of node.joinNodes ?? []) {
+    sources.push({
+      path: joinNode.path.map(segment).join('.'),
+      alias: joinNode.alias,
+      ...(joinNode.description ? { description: joinNode.description } : {}),
+    });
+  }
+  return sources;
 }
 
 /**
@@ -337,6 +422,9 @@ function expandRelationshipDirections(edges: ModelEdge[]): ModelEdge[] {
             to: edge.from,
             keys: edge.keys.map(key => ({ left: key.right, right: key.left })),
             bidirectional: false,
+            // Each direction is its own relationship, so it takes the sentence the bundle
+            // wrote from that side — not the other side's, which would read backwards.
+            description: edge.reverseDescription,
           },
         ]
       : [edge],
