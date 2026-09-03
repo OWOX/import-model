@@ -217,3 +217,15 @@ describe('importModel join metadata', () => {
     expect(result.errors.some(error => error.includes('Join names for “Invoices”'))).toBe(true);
   });
 });
+
+describe('importModel join failures are loud', () => {
+  it('names the paths that went unnamed', async () => {
+    const ctx = context();
+    ctx.owox.putJson.mockImplementation(async (path: string) => {
+      if (path.includes('blended-fields-config')) throw new Error('nope');
+      return {};
+    });
+    const result = await importModel(ctx, { id: 'storage', title: 'BQ', type: 'GOOGLE_BIGQUERY' }, describedGraph);
+    expect(result.errors.some(error => error.includes('(subscription.account)'))).toBe(true);
+  });
+});
