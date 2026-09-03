@@ -398,6 +398,12 @@ export function App() {
               <Stat icon={<TableProperties className='h-5 w-5' />} label='Data Marts created' value={result.martsCreated} />
               <Stat icon={<Network className='h-5 w-5' />} label='Relationships created' value={result.relationshipsCreated} />
             </div>
+            {result.joinsNamed > 0 && (
+              <p className='text-sm text-muted-foreground'>
+                {result.joinsNamed} joins reached through another Data Mart were named and described, so the
+                reporting column picker can tell them apart.
+              </p>
+            )}
             {result.relationshipsWithoutKeys > 0 && (
               <Banner kind='warning'>{result.relationshipsWithoutKeys} relationships were created as “Join not configured”.</Banner>
             )}
