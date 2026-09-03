@@ -230,7 +230,10 @@ async function writeJoinConfigs(
       result.joinsNamed += sources.length;
     } catch (error) {
       result.joinsFailed += sources.length;
-      result.errors.push(`Join names for “${node.title}”: ${errorMessage(error)}`);
+      // Name the paths: this call is the only one whose input the reader cannot see in ODM
+      // afterwards, so an error that does not say WHICH joins went unnamed is hard to chase.
+      const paths = sources.map(source => source.path).join(', ');
+      result.errors.push(`Join names for “${node.title}” (${paths}): ${errorMessage(error)}`);
     }
   }
 

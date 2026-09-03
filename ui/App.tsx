@@ -407,9 +407,10 @@ export function App() {
             {result.relationshipsWithoutKeys > 0 && (
               <Banner kind='warning'>{result.relationshipsWithoutKeys} relationships were created as “Join not configured”.</Banner>
             )}
-            {(result.martsFailed > 0 || result.schemasFailed > 0 || result.relationshipsFailed > 0) && (
+            {(result.martsFailed > 0 || result.schemasFailed > 0 || result.relationshipsFailed > 0 || result.joinsFailed > 0) && (
               <Banner kind='warning'>
-                Some objects need attention: {result.martsFailed} Data Marts, {result.schemasFailed} schemas, and {result.relationshipsFailed} relationships failed.
+                Some objects need attention: {result.martsFailed} Data Marts, {result.schemasFailed} schemas,{' '}
+                {result.relationshipsFailed} relationships, and {result.joinsFailed} join names failed.
               </Banner>
             )}
             {result.errors.length > 0 && (
