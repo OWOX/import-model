@@ -14,6 +14,7 @@ import {
   Search,
   TableProperties,
 } from 'lucide-react';
+import { parseBundleOverview, type BundleOverview } from './lib/bundle-overview';
 import {
   bundleGithubUrl,
   fetchVerifiedBundleList,
@@ -52,6 +53,7 @@ export function App() {
   const [selectedName, setSelectedName] = useState('');
   const [selectedUrl, setSelectedUrl] = useState('');
   const [graph, setGraph] = useState<ModelGraph | null>(null);
+  const [overview, setOverview] = useState<BundleOverview | null>(null);
   const [bundleLoading, setBundleLoading] = useState(false);
   const [bundleError, setBundleError] = useState('');
   const [storageId, setStorageId] = useState('');
@@ -130,6 +132,7 @@ export function App() {
     setBundleError('');
     setSelectedName(name);
     setSelectedUrl(url);
+    setOverview(null);
     try {
       const files = await fetchOkfBundleFromUrl(url);
       const parsed = prepareGraphForImport(parseBundle(files));
@@ -140,6 +143,9 @@ export function App() {
         ...parsed,
         nodes: parsed.nodes.map(node => ({ ...node, status: 'pending', owoxId: null })),
       });
+      // The bundle index is already in hand; the model's own description, questions and
+      // diagram live only there, never in the mart files.
+      setOverview(parseBundleOverview(files['index.md']));
       setScreen('preview');
     } catch (error) {
       setBundleError(errorMessage(error));
@@ -172,6 +178,7 @@ export function App() {
   function backToCatalog() {
     setScreen('catalog');
     setGraph(null);
+    setOverview(null);
     setSelectedName('');
     setSelectedUrl('');
     setBundleError('');
@@ -291,42 +298,47 @@ export function App() {
               <p className='mt-1 text-sm text-muted-foreground'>Review what will be created in ODM.</p>
             </div>
 
-            <div className='grid gap-3 sm:grid-cols-3'>
+            {/* Storage leads the row: it is the one decision on this screen, and the three
+                counts are the result of it. They stay on the same line at desktop width. */}
+            <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]'>
+              <div className='dm-card flex min-w-0 flex-col justify-center gap-1.5 p-3'>
+                <label className='text-xs font-medium text-muted-foreground' htmlFor='storage'>Target ODM Storage</label>
+                {storages.length === 0 ? (
+                  <p className='text-sm font-medium'>No Storage available</p>
+                ) : (
+                  <select
+                    id='storage'
+                    className='h-9 w-full min-w-0 rounded-md border bg-card px-2 text-sm'
+                    value={storageId}
+                    onChange={event => setStorageId(event.target.value)}
+                    data-testid='storage-select'
+                  >
+                    <option value=''>Select a Storage</option>
+                    {storages.map(storage => (
+                      <option key={storage.id} value={storage.id}>{storage.title} · {storage.type}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
               <Stat icon={<TableProperties className='h-5 w-5' />} label='Data Marts' value={graph.nodes.length} />
               <Stat icon={<GitBranch className='h-5 w-5' />} label='Fields' value={totalFields} />
               <Stat icon={<Network className='h-5 w-5' />} label='Relationships' value={relationshipWrites} />
             </div>
 
-            <div className='dm-card flex flex-col gap-3'>
-              <label className='text-sm font-semibold' htmlFor='storage'>Target ODM Storage</label>
-              {storages.length === 0 ? (
-                <Banner kind='error'>No Storage is available. Create or request access to an ODM Storage first.</Banner>
-              ) : (
-                <select
-                  id='storage'
-                  className='h-10 w-full rounded-md border bg-card px-3 text-sm sm:max-w-md'
-                  value={storageId}
-                  onChange={event => setStorageId(event.target.value)}
-                  data-testid='storage-select'
-                >
-                  <option value=''>Select a Storage</option>
-                  {storages.map(storage => (
-                    <option key={storage.id} value={storage.id}>{storage.title} · {storage.type}</option>
-                  ))}
-                </select>
-              )}
-              {conflictsLoading && <LoadingLine text='Checking existing Data Marts…' />}
-              {conflicts.length > 0 && (
-                <Banner kind='error'>
-                  Import blocked to prevent duplicates. These titles already exist: {conflicts.join(', ')}.
-                </Banner>
-              )}
-              {conflictsError && <Banner kind='error'>{conflictsError}</Banner>}
-              <p className='text-xs text-muted-foreground'>
-                Bundles contain conceptual schemas, not SQL definitions. Imported Data Marts remain drafts.
-              </p>
-              {storageError && <Banner kind='error'>{storageError}</Banner>}
-            </div>
+            {/* Storage messages sit below the row so a banner never stretches the cards. */}
+            {storages.length === 0 && (
+              <Banner kind='error'>No Storage is available. Create or request access to an ODM Storage first.</Banner>
+            )}
+            {conflictsLoading && <LoadingLine text='Checking existing Data Marts…' />}
+            {conflicts.length > 0 && (
+              <Banner kind='error'>
+                Import blocked to prevent duplicates. These titles already exist: {conflicts.join(', ')}.
+              </Banner>
+            )}
+            {conflictsError && <Banner kind='error'>{conflictsError}</Banner>}
+            {storageError && <Banner kind='error'>{storageError}</Banner>}
+
+            {overview && <ModelOverview overview={overview} />}
 
             <div className='dm-card overflow-hidden p-0'>
               <div className='border-b px-4 py-3 font-semibold'>Objects to create</div>
@@ -348,7 +360,10 @@ export function App() {
               </div>
             </div>
 
-            <div className='flex justify-end'>
+            <div className='flex flex-wrap items-center justify-between gap-3'>
+              <p className='max-w-xl text-xs text-muted-foreground'>
+                Bundles contain conceptual schemas, not SQL definitions. Imported Data Marts remain drafts.
+              </p>
               <button
                 className={buttonPrimary}
                 disabled={!selectedStorage || conflictsLoading || conflicts.length > 0 || Boolean(conflictsError)}
@@ -452,10 +467,83 @@ function StepIndicator({ screen }: { screen: Screen }) {
 
 function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
   return (
-    <div className='dm-card flex items-center gap-3'>
-      <span className='text-primary'>{icon}</span>
-      <div><div className='text-2xl font-semibold'>{value}</div><div className='text-xs text-muted-foreground'>{label}</div></div>
+    <div className='dm-card flex min-w-0 items-center gap-2.5 p-3'>
+      <span className='shrink-0 text-primary'>{icon}</span>
+      <div className='min-w-0'>
+        <div className='text-xl font-semibold leading-tight'>{value}</div>
+        <div className='truncate text-xs text-muted-foreground'>{label}</div>
+      </div>
     </div>
+  );
+}
+
+/**
+ * What the bundle says about itself: why the model exists, what it was built to answer,
+ * and the picture of its graph. Capped at a third of the viewport and scrolled inside,
+ * so a long description never pushes the table of objects off the screen.
+ */
+function ModelOverview({ overview }: { overview: BundleOverview }) {
+  const [imageBroken, setImageBroken] = useState(false);
+  const imageUrl = imageBroken ? undefined : overview.imageUrl;
+  const paragraphs = overview.description ? overview.description.split('\n\n') : [];
+
+  return (
+    <div className='dm-card flex max-h-[33vh] flex-col overflow-hidden p-0' data-testid='model-overview'>
+      <div className='shrink-0 border-b px-4 py-2.5 text-sm font-semibold'>About this model</div>
+      <div className='min-h-0 flex-1 overflow-auto px-4 py-3'>
+        <div className={`grid gap-4 ${imageUrl ? 'lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : ''}`}>
+          <div className='flex min-w-0 flex-col gap-3'>
+            {paragraphs.map((paragraph, index) => (
+              <p key={index} className='text-sm text-muted-foreground'>{paragraph}</p>
+            ))}
+            {overview.exampleQuestions.length > 0 && (
+              <div>
+                <h3 className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
+                  Example questions
+                </h3>
+                <ul className='mt-2 list-disc space-y-1.5 pl-5 text-sm'>
+                  {overview.exampleQuestions.map((question, index) => (
+                    <li key={index}><InlineText text={question} /></li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+          {imageUrl && (
+            <button
+              type='button'
+              className='min-w-0 self-start rounded-md border bg-card p-1 hover:bg-accent'
+              title='Open the diagram full size'
+              onClick={() => void getPluginContext().then(context => context.ui.openExternal(imageUrl))}
+            >
+              <img
+                src={imageUrl}
+                alt='Model diagram'
+                loading='lazy'
+                className='max-h-48 w-full rounded object-contain'
+                onError={() => setImageBroken(true)}
+              />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Backticked runs become code spans; a question names a field without reading as prose. */
+function InlineText({ text }: { text: string }) {
+  const parts = text.split(/`([^`]+)`/g);
+  return (
+    <>
+      {parts.map((part, index) =>
+        index % 2 === 1 ? (
+          <code key={index} className='rounded bg-muted px-1 py-0.5 text-[0.85em]'>{part}</code>
+        ) : (
+          <span key={index}>{part}</span>
+        ),
+      )}
+    </>
   );
 }
 

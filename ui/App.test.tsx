@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import * as sdk from './sdk-mock';
@@ -13,12 +13,21 @@ type: "index"
 
 const BUNDLE_INDEX = `---
 title: "E-Commerce"
+description: |
+  An online retail business modeled end to end,
+  from traffic to repeat purchasing.
 type: "index"
 ---
 | Data Mart | Fields |
 |---|---|
 | [Customers](./customers.md) | 2 |
 | [Orders](./orders.md) | 2 |
+
+# Example Questions
+
+- Which \`customers\` come back, and what do they buy?
+
+<img src="https://github.com/user-attachments/assets/e-commerce.png" />
 `;
 
 const CUSTOMERS = `---
@@ -48,6 +57,15 @@ type: "OWOX Data Mart"
 - [Customers](./customers.md) — \`customer_id = customer_id\`
 `;
 
+const BARE_INDEX = `---
+title: "Bare"
+type: "index"
+---
+| Data Mart | Fields |
+|---|---|
+| [Customers](./customers.md) | 2 |
+`;
+
 function installFetchMock() {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -55,6 +73,8 @@ function installFetchMock() {
     if (url.endsWith('/bundles/e-commerce/index.md')) return new Response(BUNDLE_INDEX, { status: 200 });
     if (url.endsWith('/bundles/e-commerce/customers.md')) return new Response(CUSTOMERS, { status: 200 });
     if (url.endsWith('/bundles/e-commerce/orders.md')) return new Response(ORDERS, { status: 200 });
+    if (url.endsWith('/bundles/bare/index.md')) return new Response(BARE_INDEX, { status: 200 });
+    if (url.endsWith('/bundles/bare/customers.md')) return new Response(CUSTOMERS, { status: 200 });
     return new Response('not found', { status: 404 });
   }));
 }
@@ -74,7 +94,7 @@ describe('Import Model flow', () => {
     fireEvent.click(card);
     await screen.findByTestId('preview-screen');
 
-    expect(screen.getByText('2', { selector: '.text-2xl' })).toBeInTheDocument();
+    expect(screen.getByText('2', { selector: '.text-xl' })).toBeInTheDocument();
     fireEvent.change(screen.getByTestId('storage-select'), { target: { value: 'storage-bigquery' } });
     await waitFor(() => expect(screen.getByTestId('import-button')).not.toBeDisabled());
     fireEvent.click(screen.getByTestId('import-button'));
@@ -84,6 +104,31 @@ describe('Import Model flow', () => {
     expect(calls.filter(call => call.method === 'POST' && call.path === '/api/data-marts')).toHaveLength(2);
     expect(calls.filter(call => call.method === 'PUT' && call.path.endsWith('/schema'))).toHaveLength(2);
     expect(calls.filter(call => call.method === 'POST' && call.path.endsWith('/relationships'))).toHaveLength(1);
+  });
+
+  it('shows what the bundle index says about the model: prose, questions, and diagram', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
+    const overview = await screen.findByTestId('model-overview');
+
+    expect(overview).toHaveTextContent('An online retail business modeled end to end, from traffic to repeat purchasing.');
+    expect(overview).toHaveTextContent('Which customers come back, and what do they buy?');
+    expect(within(overview).getByRole('img')).toHaveAttribute(
+      'src',
+      'https://github.com/user-attachments/assets/e-commerce.png',
+    );
+  });
+
+  it('leaves out the overview when the bundle index says nothing about the model', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('custom-url'));
+    fireEvent.change(screen.getByTestId('custom-url'), {
+      target: { value: 'https://github.com/OWOX/models/tree/main/bundles/bare' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Load URL/ }));
+
+    await screen.findByTestId('preview-screen');
+    expect(screen.queryByTestId('model-overview')).not.toBeInTheDocument();
   });
 
   it('opens the native ODM Model Canvas after a successful import', async () => {
