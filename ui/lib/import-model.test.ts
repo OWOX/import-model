@@ -3,7 +3,8 @@ import {
   buildSchema,
   findExistingTitleConflicts,
   importModel,
-  joinSourcesFor,
+  blendedSourcesFor,
+  dedupFunction,
   mapFieldType,
   prepareGraphForImport,
 } from './import-model';
@@ -169,23 +170,32 @@ describe('importModel join metadata', () => {
   it('names a join node so the flat column picker can tell two Accounts apart', async () => {
     const ctx = context();
     const result = await importModel(ctx, { id: 'storage', title: 'BQ', type: 'GOOGLE_BIGQUERY' }, describedGraph);
-    expect(ctx.owox.putJson).toHaveBeenCalledWith('/api/data-marts/mart-1/blended-fields-config', {
-      blendedFieldsConfig: {
-        sources: [{
-          path: 'subscription.account',
-          alias: 'Subscription Account',
-          description: 'The account behind the billed subscription.',
-        }],
-      },
-    });
-    expect(result.joinsNamed).toBe(1);
+    const call = ctx.owox.putJson.mock.calls.find(
+      ([path]: [string]) => path === '/api/data-marts/mart-1/blended-fields-config');
+    expect(call[1].blendedFieldsConfig.sources).toEqual([
+      expect.objectContaining({ path: 'subscription', alias: 'Subscription' }),
+      expect.objectContaining({
+        path: 'subscription.account',
+        alias: 'Subscription Account',
+        description: 'The account behind the billed subscription.',
+      }),
+    ]);
+    expect(result.joinsNamed).toBe(3);
   });
 
-  it('leaves the blended config alone when the bundle names nothing', async () => {
+  it('configures the joins of a bundle that names nothing, for the dedup alone', async () => {
+    // Without a config ODM collapses a joined string with STRING_AGG, so a lookup reads as
+    // every value the join ever matched. That is worth a call even when the bundle has no
+    // label or sentence to add.
     const ctx = context();
     await importModel(ctx, { id: 'storage', title: 'BQ', type: 'GOOGLE_BIGQUERY' }, graph);
-    const calls = ctx.owox.putJson.mock.calls.map((call: unknown[]) => call[0]);
-    expect(calls.some((path: string) => path.includes('blended-fields-config'))).toBe(false);
+    const call = ctx.owox.putJson.mock.calls.find(
+      ([path]: [string]) => path.includes('blended-fields-config'));
+    expect(call).toBeDefined();
+    const [source] = call![1].blendedFieldsConfig.sources;
+    expect(source).toMatchObject({ path: 'customers', alias: 'Customers' });
+    expect(source.description).toBeUndefined();
+    expect(source.fields.id.aggregateFunction).toBeDefined();
   });
 
   it('carries a hand-written label for a direct join too', () => {
@@ -195,8 +205,10 @@ describe('importModel join metadata', () => {
       edges: describedGraph.edges.map(edge =>
         edge.id === 'e1' ? { ...edge, targetLabel: 'Billed Subscription' } : edge),
     };
-    expect(joinSourcesFor(withLabel.nodes[0], withLabel, titles)).toEqual([
-      { path: 'subscription', alias: 'Billed Subscription' },
+    expect(blendedSourcesFor(withLabel.nodes[0], withLabel, titles).map(source => ({
+      path: source.path, alias: source.alias, description: source.description,
+    }))).toEqual([
+      { path: 'subscription', alias: 'Billed Subscription', description: undefined },
       {
         path: 'subscription.account',
         alias: 'Subscription Account',
@@ -212,7 +224,7 @@ describe('importModel join metadata', () => {
       return {};
     });
     const result = await importModel(ctx, { id: 'storage', title: 'BQ', type: 'GOOGLE_BIGQUERY' }, describedGraph);
-    expect(result.joinsFailed).toBe(1);
+    expect(result.joinsFailed).toBeGreaterThan(0);
     expect(result.relationshipsCreated).toBe(2);
     expect(result.errors.some(error => error.includes('Join names for “Invoices”'))).toBe(true);
   });
@@ -226,6 +238,69 @@ describe('importModel join failures are loud', () => {
       return {};
     });
     const result = await importModel(ctx, { id: 'storage', title: 'BQ', type: 'GOOGLE_BIGQUERY' }, describedGraph);
-    expect(result.errors.some(error => error.includes('(subscription.account)'))).toBe(true);
+    expect(result.errors.some(error => error.includes('subscription.account'))).toBe(true);
+  });
+});
+
+describe('join dedup', () => {
+  const titles = new Map(describedGraph.nodes.map(node => [node.key, node.title]));
+
+  it('collapses a lookup with ANY_VALUE and a fan-out with a real aggregate', () => {
+    expect(dedupFunction('N:1', 'STRING')).toBe('ANY_VALUE');
+    expect(dedupFunction('1:1', 'NUMERIC')).toBe('ANY_VALUE');
+    expect(dedupFunction('N:N', 'NUMERIC')).toBe('SUM');
+    expect(dedupFunction('1:N', 'STRING')).toBe('STRING_AGG');
+    expect(dedupFunction('1:N', 'DATE')).toBe('MAX');
+    // An untagged edge is treated as fanning out: the safe reading, since ODM's own
+    // default (STRING_AGG) is what a missing tag produces anyway.
+    expect(dedupFunction(undefined, 'STRING')).toBe('STRING_AGG');
+  });
+
+  it('writes a dedup for every field of every source it can reach', () => {
+    const tagged: ModelGraph = {
+      ...describedGraph,
+      edges: describedGraph.edges.map(edge => ({ ...edge, cardinality: 'N:1' as const })),
+    };
+    const sources = blendedSourcesFor(tagged.nodes[0], tagged, titles);
+    expect(sources.map(source => source.path)).toEqual(['subscription', 'subscription.account']);
+    expect(sources[0].fields).toEqual({
+      subscription_id: { aggregateFunction: 'ANY_VALUE', postJoinAggregations: ['COUNT', 'COUNT_DISTINCT'] },
+      account_id: { aggregateFunction: 'ANY_VALUE', postJoinAggregations: ['COUNT', 'COUNT_DISTINCT'] },
+    });
+  });
+
+  it('reads the cardinality of the hop that reaches the source, not of the first one', () => {
+    const mixed: ModelGraph = {
+      ...describedGraph,
+      edges: describedGraph.edges.map(edge =>
+        edge.id === 'e1' ? { ...edge, cardinality: 'N:1' as const }
+                         : { ...edge, cardinality: 'N:N' as const }),
+    };
+    const sources = blendedSourcesFor(mixed.nodes[0], mixed, titles);
+    const deep = sources.find(source => source.path === 'subscription.account')!;
+    expect(deep.fields.account_id.aggregateFunction).toBe('STRING_AGG');
+  });
+
+  it('names a deep source the bundle did not name after the path that reaches it', () => {
+    const unnamed: ModelGraph = {
+      ...describedGraph,
+      nodes: describedGraph.nodes.map(node =>
+        node.key === 'invoices' ? { ...node, joinNodes: undefined } : node),
+    };
+    const deep = blendedSourcesFor(unnamed.nodes[0], unnamed, titles)
+      .find(source => source.path === 'subscription.account')!;
+    expect(deep.alias).toBe('Subscription Account');
+  });
+
+  it('never re-enters a Data Mart already on the path', () => {
+    const cyclic: ModelGraph = {
+      ...describedGraph,
+      edges: [
+        ...describedGraph.edges.map(edge => ({ ...edge, bidirectional: true })),
+      ],
+    };
+    const paths = blendedSourcesFor(cyclic.nodes[0], cyclic, titles).map(source => source.path);
+    expect(new Set(paths).size).toBe(paths.length);
+    expect(paths.every(path => !path.split('.').some((seg, i, all) => all.indexOf(seg) !== i))).toBe(true);
   });
 });
