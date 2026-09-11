@@ -18,6 +18,7 @@ The authoritative platform reference is the [OWOX plugin authoring guide](https:
 | `ui/lib/plugin-runtime.ts` | Single `connect()` call from `@owox/plugin-sdk`, memoized. |
 | `ui/lib/okf.ts`, `frontmatter.ts`, `okf-types.ts` | OKF bundle → `ModelGraph` parsing. No I/O. |
 | `ui/lib/github.ts`, `bundles.ts` | Fetch public bundles from GitHub. Unauthenticated only. |
+| `ui/lib/bundle-overview.ts` | Bundle `index.md` → description, example questions, diagram. |
 | `ui/lib/import-model.ts` | Creates Data Marts, schemas, and relationships via `ctx.owox`. |
 | `ui/lib/field-type.ts` | Maps OKF field types to warehouse types. |
 | `ui/sdk-mock.ts` | Local SDK stand-in, aliased over `@owox/plugin-sdk` in `vite dev` only. |
