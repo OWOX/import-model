@@ -1,5 +1,5 @@
 import type { PluginContext } from '@owox/plugin-sdk';
-import type { ModelEdge, ModelGraph, ModelNode, SchemaField } from './okf-types';
+import type { Cardinality, ModelEdge, ModelGraph, ModelNode, SchemaField } from './okf-types';
 
 export interface StorageRef {
   id: string;
@@ -208,7 +208,7 @@ async function writeJoinConfigs(
   options: ImportOptions,
 ): Promise<void> {
   const pending = graph.nodes
-    .map(node => ({ node, sources: joinSourcesFor(node, graph, titleByKey) }))
+    .map(node => ({ node, sources: blendedSourcesFor(node, graph, titleByKey) }))
     .filter(entry => entry.sources.length > 0);
   if (pending.length === 0) return;
 
@@ -240,26 +240,107 @@ async function writeJoinConfigs(
   options.onProgress?.({ phase: 'joins', completed: pending.length, total: pending.length, label: 'Done' });
 }
 
-/** The blended sources one mart needs: its hand-written direct labels, then its join nodes. */
-export function joinSourcesFor(
+export interface BlendedSource {
+  path: string;
+  alias: string;
+  description?: string;
+  fields: Record<string, { aggregateFunction: string; postJoinAggregations: string[] }>;
+}
+
+const NUMERIC = new Set(['INTEGER', 'FLOAT', 'NUMERIC']);
+const DATETIME = new Set(['DATE', 'TIME', 'TIMESTAMP']);
+
+/**
+ * How a joined field is collapsed so the join cannot multiply rows.
+ *
+ * A target side of "1" is a lookup: one row, so ANY_VALUE returns it unchanged. Anything
+ * else fans out, and the field needs a real collapse — which is also why the tag matters:
+ * without it ODM defaults a joined string to STRING_AGG, and a plan name comes back as
+ * every plan the account ever had, concatenated.
+ */
+export function dedupFunction(cardinality: Cardinality | undefined, type: string): string {
+  if ((cardinality ?? '').split(':').pop() === '1') return 'ANY_VALUE';
+  if (NUMERIC.has(type)) return 'SUM';
+  if (DATETIME.has(type)) return 'MAX';
+  if (type === 'STRING') return 'STRING_AGG';
+  return 'COUNT_DISTINCT';
+}
+
+/** The aggregations a report may apply to the collapsed field. */
+export function postJoinAggregations(type: string): string[] {
+  if (NUMERIC.has(type)) return ['SUM', 'AVG', 'MIN', 'MAX'];
+  if (DATETIME.has(type)) return ['MIN', 'MAX'];
+  return ['COUNT', 'COUNT_DISTINCT'];
+}
+
+const FLIP: Record<Cardinality, Cardinality> = {
+  '1:1': '1:1', 'N:N': 'N:N', '1:N': 'N:1', 'N:1': '1:N',
+};
+
+/**
+ * Every source one mart reaches, ready for its blended-fields config.
+ *
+ * The walk mirrors ODM's own: follow each relationship this import creates — both
+ * directions of a bidirectional edge — and never re-enter a Data Mart already on the path,
+ * which is where ODM stops too. Each source carries the label and sentence the bundle wrote
+ * for that node when it has one, and a dedup per field derived from the cardinality of the
+ * hop that reaches it.
+ */
+export function blendedSourcesFor(
   node: ModelNode,
   graph: ModelGraph,
   titleByKey: Map<string, string>,
-): Array<{ path: string; alias: string; description?: string }> {
+): BlendedSource[] {
+  const nodeByKey = new Map(graph.nodes.map(entry => [entry.key, entry]));
   const segment = (key: string) => relationshipAlias(titleByKey.get(key) ?? key, key);
-  const sources: Array<{ path: string; alias: string; description?: string }> = [];
-  for (const edge of graph.edges) {
-    if (edge.from !== node.key || !edge.targetLabel) continue;
-    sources.push({ path: segment(edge.to), alias: edge.targetLabel });
-  }
-  for (const joinNode of node.joinNodes ?? []) {
-    sources.push({
-      path: joinNode.path.map(segment).join('.'),
-      alias: joinNode.alias,
-      ...(joinNode.description ? { description: joinNode.description } : {}),
-    });
-  }
+  const named = new Map(
+    (node.joinNodes ?? []).map(joinNode => [joinNode.path.join('.'), joinNode]),
+  );
+  const labelFor = (keys: string[]) =>
+    keys.map(key => titleByKey.get(key) ?? key).join(' ');
+
+  const sources: BlendedSource[] = [];
+  const walk = (key: string, visited: Set<string>, keys: string[]) => {
+    for (const step of stepsFrom(key, graph)) {
+      if (visited.has(step.to)) continue;
+      const trail = [...keys, step.to];
+      const target = nodeByKey.get(step.to);
+      const bundleNode = named.get(trail.join('.'));
+      const directLabel = trail.length === 1 ? step.label : undefined;
+      sources.push({
+        path: trail.map(segment).join('.'),
+        alias: bundleNode?.alias ?? directLabel ?? (trail.length === 1
+          ? titleByKey.get(step.to) ?? step.to
+          : labelFor(trail)),
+        ...(bundleNode?.description ? { description: bundleNode.description } : {}),
+        fields: Object.fromEntries((target?.schema ?? []).map(field => [field.name, {
+          aggregateFunction: dedupFunction(step.cardinality, field.type),
+          postJoinAggregations: postJoinAggregations(field.type),
+        }])),
+      });
+      walk(step.to, new Set([...visited, step.to]), trail);
+    }
+  };
+  walk(node.key, new Set([node.key]), []);
   return sources;
+}
+
+/** The hops leaving one Data Mart, counting both directions of a bidirectional edge. */
+function stepsFrom(key: string, graph: ModelGraph): Array<{
+  to: string; cardinality?: Cardinality; label?: string;
+}> {
+  const steps: Array<{ to: string; cardinality?: Cardinality; label?: string }> = [];
+  for (const edge of graph.edges) {
+    if (edge.from === key) {
+      steps.push({ to: edge.to, cardinality: edge.cardinality, label: edge.targetLabel });
+    } else if (edge.bidirectional && edge.to === key) {
+      steps.push({
+        to: edge.from,
+        cardinality: edge.cardinality ? FLIP[edge.cardinality] : undefined,
+      });
+    }
+  }
+  return steps;
 }
 
 /**

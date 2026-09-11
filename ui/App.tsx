@@ -400,8 +400,8 @@ export function App() {
             </div>
             {result.joinsNamed > 0 && (
               <p className='text-sm text-muted-foreground'>
-                {result.joinsNamed} joins reached through another Data Mart were named and described, so the
-                reporting column picker can tell them apart.
+                {result.joinsNamed} joined Data Marts were named, described and de-duplicated, so the reporting
+                column picker can tell them apart and a joined field reads as one value, not a list.
               </p>
             )}
             {result.relationshipsWithoutKeys > 0 && (
