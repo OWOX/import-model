@@ -7,6 +7,7 @@ import {
   dedupFunction,
   mapFieldType,
   prepareGraphForImport,
+  selectSubgraph,
 } from './import-model';
 import type { ModelGraph } from './okf-types';
 
@@ -302,5 +303,43 @@ describe('join dedup', () => {
     const paths = blendedSourcesFor(cyclic.nodes[0], cyclic, titles).map(source => source.path);
     expect(new Set(paths).size).toBe(paths.length);
     expect(paths.every(path => !path.split('.').some((seg, i, all) => all.indexOf(seg) !== i))).toBe(true);
+  });
+});
+
+describe('selectSubgraph', () => {
+  const threeNodeGraph: ModelGraph = {
+    storageId: null,
+    nodes: [
+      { key: 'invoices', title: 'Invoices', inputSource: 'SQL', schema: [{ name: 'id', type: 'STRING', pk: true }], position: { x: 0, y: 0 }, status: 'pending',
+        joinNodes: [{ path: ['subscription', 'account'], targetKey: 'account', alias: 'Subscription Account' }] },
+      { key: 'subscription', title: 'Subscription', inputSource: 'SQL', schema: [{ name: 'id', type: 'STRING', pk: true }], position: { x: 0, y: 0 }, status: 'pending' },
+      { key: 'account', title: 'Account', inputSource: 'SQL', schema: [{ name: 'id', type: 'STRING', pk: true }], position: { x: 0, y: 0 }, status: 'pending' },
+    ],
+    edges: [
+      { id: 'e1', from: 'invoices', to: 'subscription', keys: [{ left: 'id', right: 'id' }], bidirectional: false },
+      { id: 'e2', from: 'subscription', to: 'account', keys: [{ left: 'id', right: 'id' }], bidirectional: false },
+    ],
+  };
+
+  it('keeps only the selected Data Marts', () => {
+    const selected = selectSubgraph(threeNodeGraph, new Set(['invoices', 'account']));
+    expect(selected.nodes.map(node => node.key)).toEqual(['invoices', 'account']);
+  });
+
+  it('drops every relationship that touches a deselected Data Mart', () => {
+    const selected = selectSubgraph(threeNodeGraph, new Set(['invoices', 'account']));
+    expect(selected.edges).toEqual([]);
+  });
+
+  it('drops join nodes whose path runs through a deselected Data Mart', () => {
+    const selected = selectSubgraph(threeNodeGraph, new Set(['invoices', 'account']));
+    expect(selected.nodes[0].joinNodes).toEqual([]);
+  });
+
+  it('returns the whole graph when everything is selected', () => {
+    const selected = selectSubgraph(threeNodeGraph, new Set(['invoices', 'subscription', 'account']));
+    expect(selected.nodes).toHaveLength(3);
+    expect(selected.edges).toHaveLength(2);
+    expect(selected.nodes[0].joinNodes).toHaveLength(1);
   });
 });

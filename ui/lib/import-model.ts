@@ -344,6 +344,27 @@ function stepsFrom(key: string, graph: ModelGraph): Array<{
 }
 
 /**
+ * The part of the model the member actually chose to import.
+ *
+ * Deselecting a Data Mart has to take its graph with it: a relationship needs both ends,
+ * and a join node named for a path is meaningless once a hop on that path is gone. Both
+ * would otherwise reach ODM pointing at a mart this import never creates.
+ */
+export function selectSubgraph(graph: ModelGraph, selected: Set<string>): ModelGraph {
+  return {
+    ...graph,
+    nodes: graph.nodes
+      .filter(node => selected.has(node.key))
+      .map(node =>
+        node.joinNodes
+          ? { ...node, joinNodes: node.joinNodes.filter(joinNode => joinNode.path.every(key => selected.has(key))) }
+          : node,
+      ),
+    edges: graph.edges.filter(edge => selected.has(edge.from) && selected.has(edge.to)),
+  };
+}
+
+/**
  * Make the imported schemas joinable before they are sent to ODM.
  *
  * Public OKF files may describe a join key that is absent from one schema. ODM

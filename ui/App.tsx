@@ -26,6 +26,7 @@ import {
   importModel,
   listStorages,
   prepareGraphForImport,
+  selectSubgraph,
   type ImportProgress,
   type ImportResult,
   type StorageRef,
@@ -53,6 +54,7 @@ export function App() {
   const [selectedName, setSelectedName] = useState('');
   const [selectedUrl, setSelectedUrl] = useState('');
   const [graph, setGraph] = useState<ModelGraph | null>(null);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [overview, setOverview] = useState<BundleOverview | null>(null);
   const [bundleLoading, setBundleLoading] = useState(false);
   const [bundleError, setBundleError] = useState('');
@@ -123,9 +125,43 @@ export function App() {
     return bundles.filter(bundle => bundle.title.toLocaleLowerCase().includes(query));
   }, [bundles, search]);
 
+  // Everything downstream — the counts, the conflict check and the import itself — reads the
+  // member's selection, not the bundle. Deselecting a Data Mart takes its relationships with it.
+  const importGraph = useMemo(
+    () => (graph ? selectSubgraph(graph, selectedKeys) : null),
+    [graph, selectedKeys],
+  );
+
   const selectedStorage = storages.find(storage => storage.id === storageId) ?? null;
-  const totalFields = graph?.nodes.reduce((total, node) => total + node.schema.length, 0) ?? 0;
-  const relationshipWrites = graph?.edges.reduce((total, edge) => total + (edge.bidirectional ? 2 : 1), 0) ?? 0;
+  const totalFields = importGraph?.nodes.reduce((total, node) => total + node.schema.length, 0) ?? 0;
+  const relationshipWrites = countRelationshipWrites(importGraph);
+  const skippedRelationships = countRelationshipWrites(graph) - relationshipWrites;
+  // The conflict check runs over the whole bundle once; which collisions actually block the
+  // import is a question about the current selection, so it is answered here without a refetch.
+  const blockingConflicts = useMemo(() => {
+    const selectedTitles = new Set(importGraph?.nodes.map(node => node.title) ?? []);
+    return conflicts.filter(title => selectedTitles.has(title));
+  }, [conflicts, importGraph]);
+  const importBlocked =
+    !selectedStorage ||
+    selectedKeys.size === 0 ||
+    conflictsLoading ||
+    blockingConflicts.length > 0 ||
+    Boolean(conflictsError);
+
+  function toggleMart(key: string) {
+    setSelectedKeys(current => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  }
+
+  function toggleAllMarts() {
+    setSelectedKeys(current =>
+      current.size === (graph?.nodes.length ?? 0) ? new Set() : new Set(graph?.nodes.map(node => node.key) ?? []),
+    );
+  }
 
   async function loadBundle(name: string, url: string) {
     setBundleLoading(true);
@@ -143,6 +179,7 @@ export function App() {
         ...parsed,
         nodes: parsed.nodes.map(node => ({ ...node, status: 'pending', owoxId: null })),
       });
+      setSelectedKeys(new Set(parsed.nodes.map(node => node.key)));
       // The bundle index is already in hand; the model's own description, questions and
       // diagram live only there, never in the mart files.
       setOverview(parseBundleOverview(files['index.md']));
@@ -155,13 +192,13 @@ export function App() {
   }
 
   async function runImport() {
-    if (!graph || !selectedStorage || conflicts.length > 0 || conflictsError) return;
+    if (!importGraph || !selectedStorage || importBlocked) return;
     setScreen('importing');
     setBundleError('');
     setResult(null);
     try {
       const context = await getPluginContext();
-      const imported = await importModel(context, selectedStorage, graph, { onProgress: setProgress });
+      const imported = await importModel(context, selectedStorage, importGraph, { onProgress: setProgress });
       setResult(imported);
       setScreen('complete');
     } catch (error) {
@@ -178,6 +215,7 @@ export function App() {
   function backToCatalog() {
     setScreen('catalog');
     setGraph(null);
+    setSelectedKeys(new Set());
     setOverview(null);
     setSelectedName('');
     setSelectedUrl('');
@@ -320,9 +358,9 @@ export function App() {
                   </select>
                 )}
               </div>
-              <Stat icon={<TableProperties className='h-5 w-5' />} label='Data Marts' value={graph.nodes.length} />
-              <Stat icon={<GitBranch className='h-5 w-5' />} label='Fields' value={totalFields} />
-              <Stat icon={<Network className='h-5 w-5' />} label='Relationships' value={relationshipWrites} />
+              <Stat icon={<TableProperties className='h-5 w-5' />} label='Data Marts' value={importGraph?.nodes.length ?? 0} testId='stat-data-marts' />
+              <Stat icon={<GitBranch className='h-5 w-5' />} label='Fields' value={totalFields} testId='stat-fields' />
+              <Stat icon={<Network className='h-5 w-5' />} label='Relationships' value={relationshipWrites} testId='stat-relationships' />
             </div>
 
             {/* Storage messages sit below the row so a banner never stretches the cards. */}
@@ -330,9 +368,10 @@ export function App() {
               <Banner kind='error'>No Storage is available. Create or request access to an ODM Storage first.</Banner>
             )}
             {conflictsLoading && <LoadingLine text='Checking existing Data Marts…' />}
-            {conflicts.length > 0 && (
+            {blockingConflicts.length > 0 && (
               <Banner kind='error'>
-                Import blocked to prevent duplicates. These titles already exist: {conflicts.join(', ')}.
+                Import blocked to prevent duplicates. These titles already exist: {blockingConflicts.join(', ')}.
+                Uncheck them to import the rest.
               </Banner>
             )}
             {conflictsError && <Banner kind='error'>{conflictsError}</Banner>}
@@ -340,21 +379,62 @@ export function App() {
 
             {overview && <ModelOverview overview={overview} />}
 
+            {/* Every Data Mart is checked on arrival: the bundle is a model, and importing part of
+                it is the exception. Unchecking one also drops the relationships that reach it. */}
             <div className='dm-card overflow-hidden p-0'>
-              <div className='border-b px-4 py-3 font-semibold'>Objects to create</div>
+              <div className='flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3'>
+                <span className='font-semibold'>Objects to create</span>
+                <span className='text-xs text-muted-foreground' data-testid='selection-summary'>
+                  {selectedKeys.size} of {graph.nodes.length} selected
+                  {skippedRelationships > 0 && ` · ${skippedRelationships} relationships skipped`}
+                </span>
+              </div>
               <div className='max-h-80 overflow-auto'>
                 <table className='w-full text-sm'>
                   <thead className='sticky top-0 bg-card text-left text-muted-foreground'>
-                    <tr><th className='px-4 py-2 font-medium'>Data Mart</th><th className='px-4 py-2 font-medium'>Fields</th><th className='px-4 py-2 font-medium'>Primary key</th></tr>
+                    <tr>
+                      <th className='w-10 py-2 pl-4 pr-0 font-medium'>
+                        <input
+                          type='checkbox'
+                          className='h-4 w-4 cursor-pointer accent-primary align-middle'
+                          aria-label='Select all Data Marts'
+                          checked={selectedKeys.size === graph.nodes.length}
+                          ref={input => {
+                            if (input) input.indeterminate = selectedKeys.size > 0 && selectedKeys.size < graph.nodes.length;
+                          }}
+                          onChange={toggleAllMarts}
+                          data-testid='select-all-marts'
+                        />
+                      </th>
+                      <th className='px-4 py-2 font-medium'>Data Mart</th><th className='px-4 py-2 font-medium'>Fields</th><th className='px-4 py-2 font-medium'>Primary key</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {graph.nodes.map(node => (
-                      <tr key={node.key} className='border-t'>
-                        <td className='px-4 py-2'><div className='font-medium'>{node.title}</div><div className='line-clamp-1 max-w-xl text-xs text-muted-foreground'>{node.description}</div></td>
-                        <td className='px-4 py-2'>{node.schema.length}</td>
-                        <td className='px-4 py-2'>{node.schema.filter(field => field.pk).map(field => field.name).join(', ') || '—'}</td>
-                      </tr>
-                    ))}
+                    {graph.nodes.map(node => {
+                      const checked = selectedKeys.has(node.key);
+                      return (
+                        <tr key={node.key} className={`border-t ${checked ? '' : 'opacity-50'}`}>
+                          <td className='w-10 py-2 pl-4 pr-0 align-top'>
+                            <input
+                              id={`mart-${node.key}`}
+                              type='checkbox'
+                              className='mt-0.5 h-4 w-4 cursor-pointer accent-primary align-middle'
+                              checked={checked}
+                              onChange={() => toggleMart(node.key)}
+                              data-testid={`select-mart-${node.key}`}
+                            />
+                          </td>
+                          <td className='px-4 py-2'>
+                            <label htmlFor={`mart-${node.key}`} className='block cursor-pointer'>
+                              <div className='font-medium'>{node.title}</div>
+                              <div className='line-clamp-1 max-w-xl text-xs text-muted-foreground'>{node.description}</div>
+                            </label>
+                          </td>
+                          <td className='px-4 py-2'>{node.schema.length}</td>
+                          <td className='px-4 py-2'>{node.schema.filter(field => field.pk).map(field => field.name).join(', ') || '—'}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -366,7 +446,7 @@ export function App() {
               </p>
               <button
                 className={buttonPrimary}
-                disabled={!selectedStorage || conflictsLoading || conflicts.length > 0 || Boolean(conflictsError)}
+                disabled={importBlocked}
                 onClick={() => void runImport()}
                 data-testid='import-button'
               >
@@ -465,9 +545,9 @@ function StepIndicator({ screen }: { screen: Screen }) {
   );
 }
 
-function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
+function Stat({ icon, label, value, testId }: { icon: React.ReactNode; label: string; value: number; testId?: string }) {
   return (
-    <div className='dm-card flex min-w-0 items-center gap-2.5 p-3'>
+    <div className='dm-card flex min-w-0 items-center gap-2.5 p-3' data-testid={testId}>
       <span className='shrink-0 text-primary'>{icon}</span>
       <div className='min-w-0'>
         <div className='text-xl font-semibold leading-tight'>{value}</div>
@@ -558,6 +638,11 @@ function Banner({ kind, children }: { kind: 'error' | 'warning'; children: React
 
 function LoadingLine({ text }: { text: string }) {
   return <div className='flex items-center gap-2 py-4 text-sm text-muted-foreground'><Loader2 className='h-4 w-4 animate-spin' /> {text}</div>;
+}
+
+/** A bidirectional edge is two relationships in ODM, so it counts twice. */
+function countRelationshipWrites(graph: ModelGraph | null): number {
+  return graph?.edges.reduce((total, edge) => total + (edge.bidirectional ? 2 : 1), 0) ?? 0;
 }
 
 function errorMessage(error: unknown): string {
