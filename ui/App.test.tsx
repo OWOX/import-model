@@ -106,6 +106,69 @@ describe('Import Model flow', () => {
     expect(calls.filter(call => call.method === 'POST' && call.path.endsWith('/relationships'))).toHaveLength(1);
   });
 
+  it('imports only the Data Marts left checked, and skips the relationships that hang off the rest', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
+    await screen.findByTestId('preview-screen');
+
+    fireEvent.click(screen.getByTestId('select-mart-customers'));
+    fireEvent.change(screen.getByTestId('storage-select'), { target: { value: 'storage-bigquery' } });
+    await waitFor(() => expect(screen.getByTestId('import-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('import-button'));
+
+    await screen.findByTestId('complete-screen');
+    const calls = sdk.__mock.requests;
+    const created = calls.filter(call => call.method === 'POST' && call.path === '/api/data-marts');
+    expect(created).toHaveLength(1);
+    expect(created[0].body).toMatchObject({ title: 'Orders' });
+    expect(calls.filter(call => call.method === 'POST' && call.path.endsWith('/relationships'))).toHaveLength(0);
+  });
+
+  it('counts only the checked Data Marts on the review screen', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
+    await screen.findByTestId('preview-screen');
+
+    expect(screen.getByTestId('stat-data-marts')).toHaveTextContent('2');
+    expect(screen.getByTestId('stat-relationships')).toHaveTextContent('1');
+
+    fireEvent.click(screen.getByTestId('select-mart-customers'));
+
+    expect(screen.getByTestId('stat-data-marts')).toHaveTextContent('1');
+    expect(screen.getByTestId('stat-relationships')).toHaveTextContent('0');
+  });
+
+  it('cannot import with every Data Mart unchecked', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
+    await screen.findByTestId('preview-screen');
+    fireEvent.change(screen.getByTestId('storage-select'), { target: { value: 'storage-bigquery' } });
+    await waitFor(() => expect(screen.getByTestId('import-button')).not.toBeDisabled());
+
+    fireEvent.click(screen.getByTestId('select-all-marts'));
+
+    expect(screen.getByTestId('import-button')).toBeDisabled();
+  });
+
+  it('unblocks the import once the conflicting Data Mart is unchecked', async () => {
+    vi.spyOn(sdk.__mock.owox.models, 'getDataMarts').mockResolvedValue({
+      items: [{ id: 'existing-orders', title: 'Orders' }],
+      total: 1,
+      nextOffset: null,
+    } as never);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
+    await screen.findByTestId('preview-screen');
+    fireEvent.change(screen.getByTestId('storage-select'), { target: { value: 'storage-bigquery' } });
+    expect(await screen.findByText(/Import blocked to prevent duplicates/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('select-mart-orders'));
+
+    await waitFor(() => expect(screen.queryByText(/Import blocked to prevent duplicates/)).not.toBeInTheDocument());
+    expect(screen.getByTestId('import-button')).not.toBeDisabled();
+  });
+
   it('shows what the bundle index says about the model: prose, questions, and diagram', async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
