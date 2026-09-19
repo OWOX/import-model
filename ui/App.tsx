@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -20,7 +20,7 @@ import {
   fetchVerifiedBundleList,
   type VerifiedBundle,
 } from './lib/bundles';
-import { fetchOkfBundleFromUrl } from './lib/github';
+import { bundleRawBase, fetchOkfBundleFromUrl } from './lib/github';
 import {
   findExistingTitleConflicts,
   importModel,
@@ -181,8 +181,9 @@ export function App() {
       });
       setSelectedKeys(new Set(parsed.nodes.map(node => node.key)));
       // The bundle index is already in hand; the model's own description, questions and
-      // diagram live only there, never in the mart files.
-      setOverview(parseBundleOverview(files['index.md']));
+      // diagram live only there, never in the mart files. The folder is passed along so a
+      // diagram linked relatively inside the repo resolves the way GitHub resolves it.
+      setOverview(parseBundleOverview(files['index.md'], bundleRawBase(url)));
       setScreen('preview');
     } catch (error) {
       setBundleError(errorMessage(error));
@@ -589,25 +590,97 @@ function ModelOverview({ overview }: { overview: BundleOverview }) {
               </div>
             )}
           </div>
-          {imageUrl && (
-            <button
-              type='button'
-              className='min-w-0 self-start rounded-md border bg-card p-1 hover:bg-accent'
-              title='Open the diagram full size'
-              onClick={() => void getPluginContext().then(context => context.ui.openExternal(imageUrl))}
-            >
-              <img
-                src={imageUrl}
-                alt='Model diagram'
-                loading='lazy'
-                className='max-h-48 w-full rounded object-contain'
-                onError={() => setImageBroken(true)}
-              />
-            </button>
-          )}
+          {imageUrl && <ModelDiagram url={imageUrl} onBroken={() => setImageBroken(true)} />}
         </div>
       </div>
     </div>
+  );
+}
+
+/** Tallest the diagram may get, in CSS pixels. */
+const DIAGRAM_MAX_HEIGHT = 192;
+
+/**
+ * The model diagram, scaled down to fit the card.
+ *
+ * Sizing it with CSS (`width: 100%`) is the obvious way and the wrong one. The generated
+ * bundles ship the diagram as an SVG whose entire content sits in a `<foreignObject>`,
+ * and WebKit renders foreignObject without applying the viewBox scale — the picture comes
+ * out at 1:1 with only its top-left corner inside the box, which on a wide canvas is
+ * empty space. So the image is laid out at its natural size and shrunk with a CSS
+ * transform, which scales the rendered output instead of the SVG's own coordinate system.
+ * Raster diagrams take the same path and look the same as before.
+ *
+ * Until the image reports a natural size (and if it never does) the plain CSS fit is used,
+ * which is correct everywhere except the WebKit case above.
+ */
+function ModelDiagram({ url, onBroken }: { url: string; onBroken: () => void }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
+  const [boxWidth, setBoxWidth] = useState(0);
+
+  // The natural size is read from a detached probe, never from the rendered element:
+  // WebKit reports an in-DOM SVG image's *used* size as its naturalWidth, which would
+  // make the scale below a no-op on exactly the browser that needs it.
+  useEffect(() => {
+    setNatural(null);
+    const probe = new Image();
+    probe.onload = () => setNatural({ width: probe.naturalWidth, height: probe.naturalHeight });
+    probe.src = url;
+    return () => {
+      probe.onload = null;
+      probe.src = '';
+    };
+  }, [url]);
+
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    setBoxWidth(box.clientWidth);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(entries => setBoxWidth(entries[0].contentRect.width));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
+
+  const scale =
+    natural && natural.width > 0 && natural.height > 0 && boxWidth > 0
+      ? Math.min(boxWidth / natural.width, DIAGRAM_MAX_HEIGHT / natural.height)
+      : 0;
+
+  return (
+    <button
+      type='button'
+      className='min-w-0 self-start rounded-md border bg-card p-1 hover:bg-accent'
+      title='Open the diagram full size'
+      onClick={() => void getPluginContext().then(context => context.ui.openExternal(url))}
+    >
+      <div
+        ref={boxRef}
+        className='overflow-hidden rounded'
+        style={scale > 0 && natural ? { height: Math.round(natural.height * scale) } : undefined}
+      >
+        <img
+          src={url}
+          alt='Model diagram'
+          style={
+            scale > 0 && natural
+              ? {
+                  display: 'block',
+                  width: natural.width,
+                  height: natural.height,
+                  // Tailwind's preflight caps images at the container width, which would
+                  // clamp the natural size away before the transform ever applies.
+                  maxWidth: 'none',
+                  transform: `scale(${scale})`,
+                  transformOrigin: 'top left',
+                }
+              : { display: 'block', width: '100%', maxHeight: DIAGRAM_MAX_HEIGHT, objectFit: 'contain' }
+          }
+          onError={onBroken}
+        />
+      </div>
+    </button>
   );
 }
 

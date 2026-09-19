@@ -26,13 +26,21 @@ const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)/;
  * Read the overview out of a bundle index. Returns null when the file is missing or
  * carries none of the three parts — every part is optional on its own, so a bundle
  * with only a description still renders.
+ *
+ * `baseUrl` is the bundle folder as a raw URL with a trailing slash (see
+ * `rawDirBase`). Bundles that keep their diagram in the repo link it relatively
+ * (`![](../res/screens/retail-chain.svg)`), so without a base there is nothing to
+ * resolve against and only absolute images render.
  */
-export function parseBundleOverview(indexMd: string | null | undefined): BundleOverview | null {
+export function parseBundleOverview(
+  indexMd: string | null | undefined,
+  baseUrl?: string,
+): BundleOverview | null {
   if (!indexMd) return null;
   const { data, body } = parseFrontmatter(indexMd);
   const description = toParagraphs(typeof data.description === "string" ? data.description : "");
   const exampleQuestions = parseExampleQuestions(body);
-  const imageUrl = firstImage(body);
+  const imageUrl = firstImage(body, baseUrl);
 
   if (!description && exampleQuestions.length === 0 && !imageUrl) return null;
   const overview: BundleOverview = { exampleQuestions };
@@ -107,11 +115,20 @@ function toParagraphs(text: string): string {
     .join("\n\n");
 }
 
-/** First `<img src>` or `![](…)` in the body. Only https survives — the page cannot
- *  load anything else from its opaque origin, and a relative path has no base to
- *  resolve against once the bundle is out of GitHub's rendering. */
-function firstImage(body: string): string | undefined {
-  const candidate = firstImageSrc(body) ?? MARKDOWN_IMAGE_RE.exec(body)?.[1];
+/** First `<img src>` or `![](…)` in the body, as an https URL. A relative path is
+ *  resolved against the bundle folder, which is where GitHub's own rendering resolves
+ *  it too; anything that does not end up https is dropped, because the page cannot
+ *  load it from its opaque origin. */
+function firstImage(body: string, baseUrl?: string): string | undefined {
+  const candidate = (firstImageSrc(body) ?? MARKDOWN_IMAGE_RE.exec(body)?.[1])?.trim();
   if (!candidate) return undefined;
-  return /^https:\/\//i.test(candidate.trim()) ? candidate.trim() : undefined;
+  if (/^https:\/\//i.test(candidate)) return candidate;
+  if (!baseUrl || /^[a-z][a-z0-9+.-]*:/i.test(candidate)) return undefined;
+  let resolved: URL;
+  try {
+    resolved = new URL(candidate, baseUrl);
+  } catch {
+    return undefined;
+  }
+  return resolved.protocol === "https:" ? resolved.href : undefined;
 }
