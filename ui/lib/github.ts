@@ -74,6 +74,17 @@ export function rawFileUrl(ref: GithubBundleRef): string {
   return `${RAW_HOST}/${segs.join("/")}`;
 }
 
+/** The bundle folder as a raw base URL, for resolving links the index writes
+ *  relatively (a diagram under `../res/`). Undefined when the URL does not parse —
+ *  the caller then simply has nothing to resolve against. */
+export function bundleRawBase(input: string): string | undefined {
+  try {
+    return rawDirBase(parseGithubBundleUrl(input));
+  } catch {
+    return undefined;
+  }
+}
+
 export const MAX_BUNDLE_FILES = 100;
 
 const NOT_FOUND = "Couldn't fetch. Make sure the repo is public and the URL points to an OKF bundle folder.";

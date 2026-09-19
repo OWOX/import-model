@@ -109,12 +109,40 @@ title: "Links"
     ]);
   });
 
-  it("ignores an image that is not https", () => {
+  it("ignores a relative image when there is no bundle folder to resolve it against", () => {
     const overview = parseBundleOverview(`---
 description: "Has a relative image."
 ---
 ![diagram](./diagram.png)
 `);
+    expect(overview?.imageUrl).toBeUndefined();
+  });
+
+  it("resolves a relative image against the bundle folder", () => {
+    const overview = parseBundleOverview(
+      `---
+description: "Keeps its diagram in the repo."
+---
+![Retail Chain model diagram](../res/screens/retail-chain.svg)
+`,
+      "https://raw.githubusercontent.com/OWOX/models/main/bundles/retail-chain/",
+    );
+    expect(overview?.imageUrl).toBe(
+      "https://raw.githubusercontent.com/OWOX/models/main/bundles/res/screens/retail-chain.svg",
+    );
+  });
+
+  it("drops an image that resolves to something other than https", () => {
+    const overview = parseBundleOverview(
+      `---
+description: "Points somewhere we cannot load from."
+---
+![diagram](http://example.com/diagram.png)
+
+![other](data:image/png;base64,AAAA)
+`,
+      "https://raw.githubusercontent.com/OWOX/models/main/bundles/x/",
+    );
     expect(overview?.imageUrl).toBeUndefined();
   });
 
