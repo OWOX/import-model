@@ -96,6 +96,35 @@
     border-bottom-color: rgba(255, 255, 255, 0.04);
     background-color: rgba(255, 255, 255, 0.04);
   }
+  /* The Storage select is the one decision on the review screen, and the button that waits for
+     it sits in the header, far away. Six rings on arrival point at it, then stop for good:
+     no loop, and the class is dropped the moment a Storage is chosen. The inner ring carries
+     the color, the outer one blooms and fades, so the shape reads at a glance. */
+  .dm-storage-hint {
+    animation: dm-storage-hint 1.4s ease-out 0.4s 6 both;
+  }
+  @keyframes dm-storage-hint {
+    0% {
+      box-shadow:
+        0 0 0 0 color-mix(in oklch, var(--primary) 0%, transparent),
+        0 0 0 0 color-mix(in oklch, var(--primary) 0%, transparent);
+    }
+    25% {
+      box-shadow:
+        0 0 0 2px color-mix(in oklch, var(--primary) 85%, transparent),
+        0 0 0 7px color-mix(in oklch, var(--primary) 28%, transparent);
+    }
+    100% {
+      box-shadow:
+        0 0 0 2px color-mix(in oklch, var(--primary) 0%, transparent),
+        0 0 0 16px color-mix(in oklch, var(--primary) 0%, transparent);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dm-storage-hint {
+      animation: none;
+    }
+  }
   @media (min-width: 768px) {
     .dm-page-header {
       padding: 1.5rem 3rem;
