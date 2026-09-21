@@ -138,6 +138,25 @@ describe('Import Model flow', () => {
     expect(screen.getByTestId('stat-relationships')).toHaveTextContent('0');
   });
 
+  it('names the selection on the header button and says what is blocking the import', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
+    await screen.findByTestId('preview-screen');
+
+    expect(screen.getByTestId('import-button')).toHaveTextContent('Import 2 Data Marts');
+    expect(screen.getByTestId('import-hint')).toHaveTextContent('Select a Storage');
+
+    fireEvent.change(screen.getByTestId('storage-select'), { target: { value: 'storage-bigquery' } });
+    await waitFor(() => expect(screen.queryByTestId('import-hint')).toBeNull());
+
+    fireEvent.click(screen.getByTestId('select-mart-customers'));
+    expect(screen.getByTestId('import-button')).toHaveTextContent('Import 1 Data Mart');
+
+    fireEvent.click(screen.getByTestId('select-mart-orders'));
+    expect(screen.getByTestId('import-button')).toHaveTextContent('Import Data Marts');
+    expect(screen.getByTestId('import-hint')).toHaveTextContent('Select at least one Data Mart');
+  });
+
   it('cannot import with every Data Mart unchecked', async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));

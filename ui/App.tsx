@@ -83,7 +83,7 @@ export function App() {
         if (availableStorages.length === 1) setStorageId(availableStorages[0].id);
       })
       .catch(error => {
-        if (alive) setStorageError(`Could not load ODM Storages: ${errorMessage(error)}`);
+        if (alive) setStorageError(`Could not load Storages: ${errorMessage(error)}`);
       });
 
     void Promise.allSettled([catalogRequest, storagesRequest]).finally(() => {
@@ -148,6 +148,19 @@ export function App() {
     conflictsLoading ||
     blockingConflicts.length > 0 ||
     Boolean(conflictsError);
+  const importLabel =
+    selectedKeys.size === 0
+      ? 'Import Data Marts'
+      : `Import ${selectedKeys.size} Data Mart${selectedKeys.size === 1 ? '' : 's'}`;
+  // A disabled button in the header is far from the control that disables it, so it says why.
+  // Storage first: it is the only decision here, and everything arrives pre-selected.
+  // When there is no Storage at all the banner below explains it, and this stays quiet.
+  const importHint =
+    !selectedStorage && storages.length > 0
+      ? 'Select a Storage'
+      : selectedKeys.size === 0
+        ? 'Select at least one Data Mart'
+        : '';
 
   function toggleMart(key: string) {
     setSelectedKeys(current => {
@@ -229,15 +242,38 @@ export function App() {
 
   return (
     <div className='dm-page text-foreground'>
+      {/* The primary action sits in the header, top right: the one thing to do on the review
+          screen should not be at the bottom of a long scroll. */}
       <header className='dm-page-header border-b'>
-        <div className='flex flex-wrap items-center justify-between gap-3'>
-          <div>
-            <h1 className='dm-page-header-title'>Import Model</h1>
-            <p className='mt-1 text-sm text-muted-foreground'>
-              Create draft Data Marts, schemas, and relationships from a public OKF model.
-            </p>
+        <div className='flex flex-wrap items-start justify-between gap-3'>
+          <div className='flex items-start gap-3'>
+            {screen === 'preview' && graph && (
+              <button className={`${buttonOutline} mt-0.5 px-3 py-1.5`} onClick={backToCatalog} data-testid='back-button'>
+                <ArrowLeft className='h-4 w-4' /> Back
+              </button>
+            )}
+            <div>
+              <h1 className='dm-page-header-title'>Import Model</h1>
+              <p className='mt-1 text-sm text-muted-foreground'>
+                Create draft Data Marts, schemas, and relationships from a public OKF model.
+              </p>
+            </div>
           </div>
-          <StepIndicator screen={screen} />
+          {screen === 'preview' && graph && (
+            <div className='flex flex-col items-center gap-1'>
+              <button
+                className={buttonPrimary}
+                disabled={importBlocked}
+                onClick={() => void runImport()}
+                data-testid='import-button'
+              >
+                {importLabel} <ArrowRight className='h-4 w-4' />
+              </button>
+              {importHint && (
+                <p className='text-xs text-muted-foreground' data-testid='import-hint'>{importHint}</p>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
@@ -291,7 +327,7 @@ export function App() {
             </div>
 
             {catalogLoading ? (
-              <LoadingLine text='Loading verified models and ODM storages…' />
+              <LoadingLine text='Loading verified models and storages…' />
             ) : catalogError ? (
               <Banner kind='error'>{catalogError}</Banner>
             ) : (
@@ -323,31 +359,35 @@ export function App() {
 
         {screen === 'preview' && graph && (
           <section className='flex flex-col gap-5' data-testid='preview-screen'>
-            <div className='flex flex-wrap items-center justify-between gap-3'>
-              <button className={buttonOutline} onClick={backToCatalog}>
-                <ArrowLeft className='h-4 w-4' /> Models
-              </button>
-              <button className={buttonOutline} onClick={() => void getPluginContext().then(context => context.ui.openExternal(selectedUrl))}>
-                Source <ExternalLink className='h-4 w-4' />
-              </button>
-            </div>
-
             <div>
-              <h2 className='text-xl font-semibold'>{selectedName}</h2>
-              <p className='mt-1 text-sm text-muted-foreground'>Review what will be created in ODM.</p>
+              {/* The source link belongs to the model, not to the screen: an icon beside the name
+                  says which bundle this is without spending a word on it. */}
+              <div className='flex items-center gap-2'>
+                <h2 className='text-xl font-semibold'>{selectedName}</h2>
+                <button
+                  className='inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground'
+                  title='Open the bundle source on GitHub'
+                  aria-label='Open the bundle source on GitHub'
+                  onClick={() => void getPluginContext().then(context => context.ui.openExternal(selectedUrl))}
+                  data-testid='source-link'
+                >
+                  <ExternalLink className='h-4 w-4' />
+                </button>
+              </div>
+              <p className='mt-1 text-sm text-muted-foreground'>Review what will be created in OWOX Data Marts.</p>
             </div>
 
             {/* Storage leads the row: it is the one decision on this screen, and the three
                 counts are the result of it. They stay on the same line at desktop width. */}
             <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]'>
               <div className='dm-card flex min-w-0 flex-col justify-center gap-1.5 p-3'>
-                <label className='text-xs font-medium text-muted-foreground' htmlFor='storage'>Target ODM Storage</label>
+                <label className='text-xs font-medium text-muted-foreground' htmlFor='storage'>Storage</label>
                 {storages.length === 0 ? (
                   <p className='text-sm font-medium'>No Storage available</p>
                 ) : (
                   <select
                     id='storage'
-                    className='h-9 w-full min-w-0 rounded-md border bg-card px-2 text-sm'
+                    className={`h-9 w-full min-w-0 rounded-md border bg-card px-2 text-sm ${storageId ? '' : 'dm-storage-hint'}`}
                     value={storageId}
                     onChange={event => setStorageId(event.target.value)}
                     data-testid='storage-select'
@@ -366,7 +406,7 @@ export function App() {
 
             {/* Storage messages sit below the row so a banner never stretches the cards. */}
             {storages.length === 0 && (
-              <Banner kind='error'>No Storage is available. Create or request access to an ODM Storage first.</Banner>
+              <Banner kind='error'>No Storage is available. Create or request access to a Storage first.</Banner>
             )}
             {conflictsLoading && <LoadingLine text='Checking existing Data Marts…' />}
             {blockingConflicts.length > 0 && (
@@ -441,19 +481,9 @@ export function App() {
               </div>
             </div>
 
-            <div className='flex flex-wrap items-center justify-between gap-3'>
-              <p className='max-w-xl text-xs text-muted-foreground'>
-                Bundles contain conceptual schemas, not SQL definitions. Imported Data Marts remain drafts.
-              </p>
-              <button
-                className={buttonPrimary}
-                disabled={importBlocked}
-                onClick={() => void runImport()}
-                data-testid='import-button'
-              >
-                Import into ODM <ArrowRight className='h-4 w-4' />
-              </button>
-            </div>
+            <p className='max-w-xl text-xs text-muted-foreground'>
+              Bundles contain conceptual schemas, not SQL definitions. Imported Data Marts remain drafts.
+            </p>
           </section>
         )}
 
@@ -461,7 +491,7 @@ export function App() {
           <section className='mx-auto flex max-w-2xl flex-col gap-5 py-12 text-center' data-testid='importing-screen'>
             <Loader2 className='mx-auto h-10 w-10 animate-spin text-primary' />
             <div>
-              <h2 className='text-xl font-semibold'>Creating the model in ODM</h2>
+              <h2 className='text-xl font-semibold'>Creating the model in OWOX Data Marts</h2>
               <p className='mt-1 text-sm text-muted-foreground'>Keep this page open until all relationships are created.</p>
             </div>
             {progress && (
@@ -488,7 +518,7 @@ export function App() {
                 <AlertCircle className='mx-auto h-12 w-12 text-amber-600' />
               )}
               <h2 className='mt-3 text-xl font-semibold'>Import finished</h2>
-              <p className='mt-1 text-sm text-muted-foreground'>The native ODM canvas reads these Data Marts and relationships directly.</p>
+              <p className='mt-1 text-sm text-muted-foreground'>The native Model Canvas reads these Data Marts and relationships directly.</p>
             </div>
             <div className='grid gap-3 sm:grid-cols-2'>
               <Stat icon={<TableProperties className='h-5 w-5' />} label='Data Marts created' value={result.martsCreated} />
@@ -527,22 +557,6 @@ export function App() {
         )}
       </main>
     </div>
-  );
-}
-
-function StepIndicator({ screen }: { screen: Screen }) {
-  const current = screen === 'catalog' ? 1 : screen === 'preview' ? 2 : 3;
-  return (
-    <ol className='flex items-center gap-2 text-xs text-muted-foreground'>
-      {['Model', 'Review', 'Create'].map((label, index) => {
-        const step = index + 1;
-        return (
-          <li key={label} className={`rounded-full px-3 py-1 ${current === step ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
-            {step}. {label}
-          </li>
-        );
-      })}
-    </ol>
   );
 }
 
