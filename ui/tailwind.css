@@ -76,7 +76,18 @@
     min-height: 100%;
   }
   .dm-page-header {
-    padding: 1rem 2rem;
+    /* Sticky: the import button lives up here, and the table below it is long enough that the
+       member would otherwise scroll away from the only action on the screen.
+       The iframe is transparent on purpose (see body above), so a sticky bar has to paint its
+       own fill or the content scrolls through it — and the top corners keep the host radius,
+       so the fill never squares off the host's rounded panel. */
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background-color: var(--background);
+    border-top-left-radius: var(--radius);
+    border-top-right-radius: var(--radius);
+    padding: 0.75rem 2rem;
   }
   .dm-page-header-title {
     font-size: 1.25rem;
@@ -127,7 +138,7 @@
   }
   @media (min-width: 768px) {
     .dm-page-header {
-      padding: 1.5rem 3rem;
+      padding: 0.875rem 3rem;
     }
     .dm-page-header-title {
       font-size: 1.5rem;
