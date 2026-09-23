@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBundle } from './okf';
+import { isBundleIndex, parseBundle } from './okf';
 
 describe('parseBundle', () => {
   it('preserves alias, description, primary key, and joins from the current OWOX/models format', () => {
@@ -199,5 +199,37 @@ type: "OWOX Data Mart"
       description: 'A reaches B.',
       reverseDescription: 'B reaches A.',
     });
+  });
+});
+
+describe('bundle index detection', () => {
+  const mart = (title: string, joins = '') => `---
+title: "${title}"
+type: "OWOX Data Mart"
+---
+# Schema
+| Column | Type | Description |
+|---|---|---|
+| \`id\` | STRING | PK. ${title} |
+${joins}`;
+
+  it("parses a mart whose file name merely ends in 'index' (initiate-index.md)", () => {
+    const graph = parseBundle({
+      'seo/index.md': '---\ntype: index\ntitle: SEO\n---\n\n# SEO\n',
+      'seo/pages.md': mart('Pages', '\n## Joins\n- [Initiate Index](./initiate-index.md) — `id = id`\n'),
+      'seo/initiate-index.md': mart('Initiate Index'),
+    });
+    expect(graph.nodes.map(node => node.key).sort()).toEqual(['initiate-index', 'pages']);
+    expect(graph.edges).toHaveLength(1);
+    expect(graph.edges[0]).toMatchObject({ from: 'pages', to: 'initiate-index' });
+  });
+
+  it('matches only a file named exactly index.md', () => {
+    expect(isBundleIndex('index.md')).toBe(true);
+    expect(isBundleIndex('seo/index.md')).toBe(true);
+    expect(isBundleIndex('seo/INDEX.md')).toBe(true);
+    expect(isBundleIndex('seo/initiate-index.md')).toBe(false);
+    expect(isBundleIndex('seo/reindex.md')).toBe(false);
+    expect(isBundleIndex('seo/index.md.bak')).toBe(false);
   });
 });
