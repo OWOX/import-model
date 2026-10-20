@@ -8,7 +8,7 @@ export interface StorageRef {
 }
 
 export interface ImportProgress {
-  phase: 'marts' | 'relationships' | 'joins';
+  phase: 'marts' | 'relationships' | 'joins' | 'calculated fields';
   completed: number;
   total: number;
   label: string;
@@ -23,6 +23,8 @@ export interface ImportResult {
   relationshipsWithoutKeys: number;
   joinsNamed: number;
   joinsFailed: number;
+  /** The ODM id of every Data Mart this import created, by bundle key. */
+  martIds: Record<string, string>;
   errors: string[];
 }
 
@@ -76,6 +78,7 @@ export async function importModel(
     relationshipsWithoutKeys: 0,
     joinsNamed: 0,
     joinsFailed: 0,
+    martIds: {},
     errors: [],
   };
   const idByKey = new Map<string, string>();
@@ -154,7 +157,7 @@ export async function importModel(
         `/api/data-marts/${encodeURIComponent(sourceId)}/relationships`,
         {
           targetDataMartId: targetId,
-          targetAlias: relationshipAlias(targetTitle, edge.to),
+          targetAlias: edge.alias ?? relationshipAlias(targetTitle, edge.to),
           joinConditions: edge.keys.map(key => ({
             sourceFieldName: key.left,
             targetFieldName: key.right,
@@ -181,6 +184,7 @@ export async function importModel(
   });
 
   await writeJoinConfigs(context, preparedGraph, idByKey, titleByKey, result, options);
+  result.martIds = Object.fromEntries(idByKey);
   return result;
 }
 
@@ -292,7 +296,6 @@ export function blendedSourcesFor(
   titleByKey: Map<string, string>,
 ): BlendedSource[] {
   const nodeByKey = new Map(graph.nodes.map(entry => [entry.key, entry]));
-  const segment = (key: string) => relationshipAlias(titleByKey.get(key) ?? key, key);
   const named = new Map(
     (node.joinNodes ?? []).map(joinNode => [joinNode.path.join('.'), joinNode]),
   );
@@ -300,15 +303,16 @@ export function blendedSourcesFor(
     keys.map(key => titleByKey.get(key) ?? key).join(' ');
 
   const sources: BlendedSource[] = [];
-  const walk = (key: string, visited: Set<string>, keys: string[]) => {
-    for (const step of stepsFrom(key, graph)) {
+  const walk = (key: string, visited: Set<string>, keys: string[], aliases: string[]) => {
+    for (const step of stepsFrom(key, graph, titleByKey)) {
       if (visited.has(step.to)) continue;
       const trail = [...keys, step.to];
+      const aliasTrail = [...aliases, step.alias];
       const target = nodeByKey.get(step.to);
       const bundleNode = named.get(trail.join('.'));
       const directLabel = trail.length === 1 ? step.label : undefined;
       sources.push({
-        path: trail.map(segment).join('.'),
+        path: aliasTrail.join('.'),
         alias: bundleNode?.alias ?? directLabel ?? (trail.length === 1
           ? titleByKey.get(step.to) ?? step.to
           : labelFor(trail)),
@@ -318,24 +322,42 @@ export function blendedSourcesFor(
           postJoinAggregations: postJoinAggregations(field.type),
         }])),
       });
-      walk(step.to, new Set([...visited, step.to]), trail);
+      walk(step.to, new Set([...visited, step.to]), trail, aliasTrail);
     }
   };
-  walk(node.key, new Set([node.key]), []);
+  walk(node.key, new Set([node.key]), [], []);
   return sources;
 }
 
-/** The hops leaving one Data Mart, counting both directions of a bidirectional edge. */
-function stepsFrom(key: string, graph: ModelGraph): Array<{
-  to: string; cardinality?: Cardinality; label?: string;
-}> {
-  const steps: Array<{ to: string; cardinality?: Cardinality; label?: string }> = [];
+export interface JoinStep {
+  to: string;
+  /** The `targetAlias` this import gives the relationship — one segment of a join path. */
+  alias: string;
+  cardinality?: Cardinality;
+  label?: string;
+}
+
+/**
+ * The hops leaving one Data Mart, counting both directions of a bidirectional edge, each under
+ * the alias its relationship is created with: the bundle's own `as \`alias\`` when it wrote one,
+ * else one derived from the target's title. Join paths and formula references are both made of
+ * these, so they cannot disagree with the relationships ODM actually holds.
+ */
+export function stepsFrom(key: string, graph: ModelGraph, titleByKey: Map<string, string>): JoinStep[] {
+  const defaultAlias = (target: string) => relationshipAlias(titleByKey.get(target) ?? target, target);
+  const steps: JoinStep[] = [];
   for (const edge of graph.edges) {
     if (edge.from === key) {
-      steps.push({ to: edge.to, cardinality: edge.cardinality, label: edge.targetLabel });
+      steps.push({
+        to: edge.to,
+        alias: edge.alias ?? defaultAlias(edge.to),
+        cardinality: edge.cardinality,
+        label: edge.targetLabel,
+      });
     } else if (edge.bidirectional && edge.to === key) {
       steps.push({
         to: edge.from,
+        alias: edge.reverseAlias ?? defaultAlias(edge.from),
         cardinality: edge.cardinality ? FLIP[edge.cardinality] : undefined,
       });
     }
@@ -461,7 +483,7 @@ function schemaDiscriminator(storageType: string): string {
   return `${engine}-data-mart-schema`;
 }
 
-function isBigQuery(storageType: string): boolean {
+export function isBigQuery(storageType: string): boolean {
   return storageType === 'GOOGLE_BIGQUERY' || storageType === 'LEGACY_GOOGLE_BIGQUERY';
 }
 
@@ -527,16 +549,18 @@ function expandRelationshipDirections(edges: ModelEdge[]): ModelEdge[] {
             to: edge.from,
             keys: edge.keys.map(key => ({ left: key.right, right: key.left })),
             bidirectional: false,
-            // Each direction is its own relationship, so it takes the sentence the bundle
-            // wrote from that side — not the other side's, which would read backwards.
+            // Each direction is its own relationship, so it takes the sentence and the alias the
+            // bundle wrote from that side — not the other side's, which would read backwards.
             description: edge.reverseDescription,
+            alias: edge.reverseAlias,
+            reverseAlias: undefined,
           },
         ]
       : [edge],
   );
 }
 
-function relationshipAlias(title: string, fallback: string): string {
+export function relationshipAlias(title: string, fallback: string): string {
   const normalized = title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')

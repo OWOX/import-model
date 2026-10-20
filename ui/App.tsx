@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Boxes,
+  Calculator,
   CheckCircle2,
   ExternalLink,
   GitBranch,
@@ -15,12 +16,13 @@ import {
   TableProperties,
 } from 'lucide-react';
 import { parseBundleOverview, type BundleOverview } from './lib/bundle-overview';
+import { countCalculatedFields, queueCalculatedFields, type QueueResult } from './lib/calculated-fields';
 import {
   bundleGithubUrl,
   fetchVerifiedBundleList,
   type VerifiedBundle,
 } from './lib/bundles';
-import { bundleRawBase, fetchOkfBundleFromUrl } from './lib/github';
+import { bundleBlobBase, bundleRawBase, fetchOkfBundleFromUrl } from './lib/github';
 import {
   findExistingTitleConflicts,
   importModel,
@@ -34,6 +36,8 @@ import {
 import { parseBundle } from './lib/okf';
 import type { ModelGraph } from './lib/okf-types';
 import { getPluginContext } from './lib/plugin-runtime';
+import { Markdown } from './Markdown';
+import { PendingCalculatedFields } from './PendingCalculatedFields';
 
 type Screen = 'catalog' | 'preview' | 'importing' | 'complete';
 
@@ -64,6 +68,7 @@ export function App() {
   const [conflictsError, setConflictsError] = useState('');
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [queue, setQueue] = useState<QueueResult | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -134,6 +139,7 @@ export function App() {
 
   const selectedStorage = storages.find(storage => storage.id === storageId) ?? null;
   const totalFields = importGraph?.nodes.reduce((total, node) => total + node.schema.length, 0) ?? 0;
+  const totalCalculated = countCalculatedFields(importGraph);
   const relationshipWrites = countRelationshipWrites(importGraph);
   const skippedRelationships = countRelationshipWrites(graph) - relationshipWrites;
   // The conflict check runs over the whole bundle once; which collisions actually block the
@@ -210,9 +216,16 @@ export function App() {
     setScreen('importing');
     setBundleError('');
     setResult(null);
+    setQueue(null);
     try {
       const context = await getPluginContext();
       const imported = await importModel(context, selectedStorage, importGraph, { onProgress: setProgress });
+      // ODM refuses a formula over columns it has not connected, and a fresh draft has connected
+      // none. The formulas wait in the plugin's collection until each Data Mart has an input source.
+      if (countCalculatedFields(importGraph) > 0) {
+        setProgress({ phase: 'calculated fields', completed: 0, total: 1, label: 'Saving calculated fields for later' });
+        setQueue(await queueCalculatedFields(context, prepareGraphForImport(importGraph), imported.martIds, selectedName));
+      }
       setResult(imported);
       setScreen('complete');
     } catch (error) {
@@ -238,6 +251,7 @@ export function App() {
     setConflictsError('');
     setProgress(null);
     setResult(null);
+    setQueue(null);
   }
 
   return (
@@ -282,6 +296,7 @@ export function App() {
 
         {screen === 'catalog' && (
           <section className='flex flex-col gap-5' data-testid='catalog-screen'>
+            <PendingCalculatedFields />
             <div className='dm-card flex flex-col gap-3'>
               <div className='flex items-center gap-2'>
                 <Github className='h-5 w-5 text-muted-foreground' />
@@ -418,7 +433,7 @@ export function App() {
             {conflictsError && <Banner kind='error'>{conflictsError}</Banner>}
             {storageError && <Banner kind='error'>{storageError}</Banner>}
 
-            {overview && <ModelOverview overview={overview} />}
+            {overview && <ModelOverview overview={overview} linkBase={bundleBlobBase(selectedUrl)} />}
 
             {/* Every Data Mart is checked on arrival: the bundle is a model, and importing part of
                 it is the exception. Unchecking one also drops the relationships that reach it. */}
@@ -447,7 +462,10 @@ export function App() {
                           data-testid='select-all-marts'
                         />
                       </th>
-                      <th className='px-4 py-2 font-medium'>Data Mart</th><th className='px-4 py-2 font-medium'>Fields</th><th className='px-4 py-2 font-medium'>Primary key</th>
+                      <th className='px-4 py-2 font-medium'>Data Mart</th>
+                      <th className='px-4 py-2 font-medium'>Fields</th>
+                      <th className='whitespace-nowrap px-4 py-2 font-medium'>Calculated fields</th>
+                      <th className='whitespace-nowrap px-4 py-2 font-medium'>Primary key</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -472,6 +490,13 @@ export function App() {
                             </label>
                           </td>
                           <td className='px-4 py-2'>{node.schema.length}</td>
+                          <td
+                            className='px-4 py-2'
+                            title={node.calculatedFields?.map(field => field.alias ?? field.name).join(', ')}
+                            data-testid={`calculated-${node.key}`}
+                          >
+                            {node.calculatedFields?.length || '—'}
+                          </td>
                           <td className='px-4 py-2'>{node.schema.filter(field => field.pk).map(field => field.name).join(', ') || '—'}</td>
                         </tr>
                       );
@@ -483,6 +508,8 @@ export function App() {
 
             <p className='max-w-xl text-xs text-muted-foreground'>
               Bundles contain conceptual schemas, not SQL definitions. Imported Data Marts remain drafts.
+              {totalCalculated > 0 &&
+                ' Calculated fields are added once a Data Mart has an input source and is published: Import Model lists them on its start screen.'}
             </p>
           </section>
         )}
@@ -530,6 +557,19 @@ export function App() {
                 column picker can tell them apart and a joined field reads as one value, not a list.
               </p>
             )}
+            {queue && queue.queued > 0 && (
+              <div className='dm-card flex items-start gap-3' data-testid='calculated-queued'>
+                <Calculator className='mt-0.5 h-5 w-5 shrink-0 text-primary' />
+                <div className='text-sm'>
+                  <p className='font-medium'>{queue.queued} calculated fields are waiting</p>
+                  <p className='mt-1 text-muted-foreground'>
+                    ODM adds a calculated field only to a published Data Mart, and these are drafts. Set an input source
+                    for each and publish it, then open Import Model again: its start screen lists them and adds the
+                    formulas in one click.
+                  </p>
+                </div>
+              </div>
+            )}
             {result.relationshipsWithoutKeys > 0 && (
               <Banner kind='warning'>{result.relationshipsWithoutKeys} relationships were created as “Join not configured”.</Banner>
             )}
@@ -539,11 +579,11 @@ export function App() {
                 {result.relationshipsFailed} relationships, and {result.joinsFailed} join names failed.
               </Banner>
             )}
-            {result.errors.length > 0 && (
+            {result.errors.length + (queue?.errors.length ?? 0) > 0 && (
               <div className='dm-card'>
                 <h3 className='font-semibold'>Import warnings</h3>
                 <ul className='mt-2 list-disc space-y-1 pl-5 text-sm text-muted-foreground'>
-                  {result.errors.map((error, index) => <li key={`${index}:${error}`}>{error}</li>)}
+                  {[...result.errors, ...(queue?.errors ?? [])].map((error, index) => <li key={`${index}:${error}`}>{error}</li>)}
                 </ul>
               </div>
             )}
@@ -577,10 +617,9 @@ function Stat({ icon, label, value, testId }: { icon: React.ReactNode; label: st
  * and the picture of its graph. Capped at a third of the viewport and scrolled inside,
  * so a long description never pushes the table of objects off the screen.
  */
-function ModelOverview({ overview }: { overview: BundleOverview }) {
+function ModelOverview({ overview, linkBase }: { overview: BundleOverview; linkBase?: string }) {
   const [imageBroken, setImageBroken] = useState(false);
   const imageUrl = imageBroken ? undefined : overview.imageUrl;
-  const paragraphs = overview.description ? overview.description.split('\n\n') : [];
 
   return (
     <div className='dm-card flex max-h-[33vh] flex-col overflow-hidden p-0' data-testid='model-overview'>
@@ -588,9 +627,7 @@ function ModelOverview({ overview }: { overview: BundleOverview }) {
       <div className='min-h-0 flex-1 overflow-auto px-4 py-3'>
         <div className={`grid gap-4 ${imageUrl ? 'lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : ''}`}>
           <div className='flex min-w-0 flex-col gap-3'>
-            {paragraphs.map((paragraph, index) => (
-              <p key={index} className='text-sm text-muted-foreground'>{paragraph}</p>
-            ))}
+            {overview.description && <Markdown text={overview.description} linkBase={linkBase} />}
             {overview.exampleQuestions.length > 0 && (
               <div>
                 <h3 className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>

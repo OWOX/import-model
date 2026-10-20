@@ -20,8 +20,11 @@ The authoritative platform reference is the [OWOX plugin authoring guide](https:
 | `ui/lib/github.ts`, `bundles.ts` | Fetch public bundles from GitHub. Unauthenticated only. |
 | `ui/lib/bundle-overview.ts` | Bundle `index.md` → description, example questions, diagram. |
 | `ui/lib/import-model.ts` | Creates Data Marts, schemas, and relationships via `ctx.owox`. |
+| `ui/lib/calculated-fields.ts` | Converts bundle formulas to ODM's stored form, parks them in the `pendingCalculatedFields` collection, adds them once a Data Mart's columns are CONNECTED. |
+| `ui/Markdown.tsx` | Renders bundle Markdown (model description) safely; no raw HTML. |
+| `ui/PendingCalculatedFields.tsx` | Start-screen list of calculated fields still waiting, with the Add buttons. |
 | `ui/lib/field-type.ts` | Maps OKF field types to warehouse types. |
-| `ui/sdk-mock.ts` | Local SDK stand-in, aliased over `@owox/plugin-sdk` in `vite dev` only. |
+| `ui/sdk-mock.ts` | Local SDK stand-in, aliased over `@owox/plugin-sdk` in `vite dev` and tests. Keeps ODM's rule that API-saved columns are DISCONNECTED; `__importModelMock.connectMarts()` simulates an input source. |
 | `.github/workflows/deploy-pages.yml` | Typecheck, test, build, deploy to Pages on push to `main`. |
 
 ## Runtime constraints
@@ -82,5 +85,10 @@ Releasing:
 1. Merge to `main`. The Pages workflow deploys automatically.
 2. Verify `https://owox.github.io/import-model/` loads without sign-in.
 3. Create a published, non-prerelease GitHub Release tagged `MAJOR.MINOR.PATCH` (optional leading `v`). ODM reads the plugin version from that tag.
+
+`plugin.json` declares the `pendingCalculatedFields` collection. Once released, it can never be
+removed or renamed, and its `scope` and `entityBinding` cannot change; ship any such change as a
+new collection, a major version, and a migration in plugin code. A `plugin.json` change needs a
+release; a code-only change does not.
 
 Changing `vite.config.ts`'s `base` or `build.outDir` breaks the deployed asset paths. If you change either, update `plugin.json` and this file together.

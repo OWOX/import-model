@@ -1,4 +1,4 @@
-import type { ModelGraph, ModelNode, ModelEdge, InputSource, Cardinality, SchemaField, JoinNode } from "./okf-types";
+import type { ModelGraph, ModelNode, ModelEdge, InputSource, Cardinality, SchemaField, JoinNode, CalculatedField } from "./okf-types";
 import { parseFrontmatter } from "./frontmatter";
 import { normalizeFieldType } from "./field-type";
 
@@ -34,9 +34,11 @@ export function parseBundle(files: Record<string, string>): ModelGraph {
     pkByKey.set(key, schema.find(f => f.pk)?.name);
     const inputSource = (owox.inputSource || ov.definitionType || inferSource(data.tags) || sourceFromType(data.type) || "SQL") as InputSource;
     const owoxId = owox.id ?? (ov.id && ov.id !== "—" ? ov.id : null);
+    const calculatedFields = parseCalculated(body);
     nodes.push({
       key, title, inputSource,
       description: data.description || undefined, definition: parseDefinition(body), schema,
+      ...(calculatedFields.length ? { calculatedFields } : {}),
       position: owox.position || { x: 0, y: 0 },
       status: owoxId || ov.status === "PUBLISHED" ? "created" : "pending", owoxId,
     });
@@ -44,7 +46,7 @@ export function parseBundle(files: Record<string, string>): ModelGraph {
 
   const raw: {
     from: string; to: string; keys: { left: string; right: string }[];
-    cardinality?: Cardinality; description?: string; targetLabel?: string;
+    cardinality?: Cardinality; description?: string; targetLabel?: string; alias?: string;
   }[] = [];
   const joinNodesByKey = new Map<string, JoinNode[]>();
   for (const [path, text] of docs) {
@@ -62,7 +64,12 @@ export function parseBundle(files: Record<string, string>): ModelGraph {
         const toKey = slugToKey.get(basename(m[2]));
         chain = [];
         if (!toKey) continue;
-        let keys = [...m[3].matchAll(/`([^`]+?)\s*=\s*([^`]+?)`/g)].map(g => ({ left: g[1].trim(), right: g[2].trim() }));
+        // `- [Purchases](./purchases.md) as \`purchases_e_commerce\` — …`: the relationship alias
+        // the bundle's formulas use for this hop. Taken off the front so the rest parses as before.
+        const am = m[3].match(/^as\s+`([^`]+)`\s*(?:—|--)?\s*/);
+        const alias = am ? am[1].trim() : undefined;
+        const rest = am ? m[3].slice(am[0].length) : m[3];
+        let keys = [...rest.matchAll(/`([^`]+?)\s*=\s*([^`]+?)`/g)].map(g => ({ left: g[1].trim(), right: g[2].trim() }));
         if (keys.length === 0) {
           // Faithful-OWOX join: recover from a `FK to [Target]` note + target PK.
           const targetTitle = nodes.find(n => n.key === toKey)?.title ?? "";
@@ -70,12 +77,13 @@ export function parseBundle(files: Record<string, string>): ModelGraph {
           const rightPk = pkByKey.get(toKey);
           if (fkCol && rightPk) keys = [{ left: fkCol.name, right: rightPk }];
         }
-        const cm = m[3].match(/\[(1:1|1:N|N:1|N:N)\]/);
+        const cm = rest.match(/\[(1:1|1:N|N:1|N:N)\]/);
         const cardinality = cm ? (cm[1] as Cardinality) : undefined;
         raw.push({
           from: fromKey, to: toKey, keys, cardinality,
-          description: joinDescription(m[3]) || undefined,
+          description: joinDescription(rest) || undefined,
           targetLabel: m[1].trim() || undefined,
+          ...(alias ? { alias } : {}),
         });
         chain = [{ indent: 0, path: [toKey] }];
         continue;
@@ -154,11 +162,13 @@ export function parseBundle(files: Record<string, string>): ModelGraph {
       // bundle describes each from its own side — so the mirrored sentence is kept rather
       // than collapsed into the first one.
       if (r.description && ex.from === r.to && !ex.reverseDescription) ex.reverseDescription = r.description;
+      if (r.alias && ex.from === r.to && !ex.reverseAlias) ex.reverseAlias = r.alias;
       continue;
     }
     const e: ModelEdge = { id: `e${edges.length + 1}`, from: r.from, to: r.to, keys: r.keys, bidirectional: false };
     if (r.cardinality) e.cardinality = r.cardinality;
     if (r.description) e.description = r.description;
+    if (r.alias) e.alias = r.alias;
     // Only a label the bundle wrote by hand: one that merely repeats the mart's title says
     // nothing ODM would not show anyway.
     if (r.targetLabel && r.targetLabel !== (nodes.find(n => n.key === r.to)?.title ?? "")) {
@@ -347,6 +357,49 @@ function parseFieldRest(name: string, rest: string): SchemaField {
   const field: SchemaField = { name, type: normalizeFieldType(type), pk: false };
   if (description) field.description = description;
   return field;
+}
+
+/**
+ * `## Calculated fields`: one `### \`name\` · TYPE · Level` block per field, an optional
+ * `- **Alias:**` line, description paragraphs, then one fenced SQL block holding the formula.
+ * The level (Metric / Column) is not kept — ODM derives it from the formula and never accepts a
+ * chosen one. The section ends at the next `#` or `##` heading.
+ */
+function parseCalculated(body: string): CalculatedField[] {
+  const out: CalculatedField[] = [];
+  let inSection = false;
+  let cur: { name: string; type: string; alias?: string; desc: string[]; formula?: string } | null = null;
+  let fence: string[] | null = null;
+  const flush = () => {
+    if (cur && cur.formula) {
+      const field: CalculatedField = { name: cur.name, type: cur.type, formula: cur.formula };
+      if (cur.alias) field.alias = cur.alias;
+      const description = cur.desc.join("\n").trim();
+      if (description) field.description = description;
+      out.push(field);
+    }
+    cur = null;
+    fence = null;
+  };
+  for (const ln of body.split("\n")) {
+    if (fence) {
+      if (/^```\s*$/.test(ln)) { cur!.formula = fence.join("\n").trim(); fence = null; }
+      else fence.push(ln);
+      continue;
+    }
+    if (/^##\s+Calculated fields\s*$/i.test(ln)) { inSection = true; continue; }
+    if (!inSection) continue;
+    if (/^#{1,2}\s/.test(ln)) { flush(); inSection = false; continue; }
+    const h = ln.match(/^###\s+`([^`]+)`(?:\s*·\s*([^·]+?))?(?:\s*·\s*\w+)?\s*$/);
+    if (h) { flush(); cur = { name: h[1].trim(), type: normalizeFieldType(h[2] ?? "NUMERIC"), desc: [] }; continue; }
+    if (!cur || cur.formula !== undefined) continue;     // text after the fence is ignored
+    if (/^```/.test(ln)) { fence = []; continue; }
+    const a = ln.match(/^- \*\*Alias:\*\*\s*(.+)$/);
+    if (a) { cur.alias = a[1].trim(); continue; }
+    cur.desc.push(ln);
+  }
+  flush();
+  return out;
 }
 
 function parseDefinition(body: string): string | null {

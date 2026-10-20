@@ -16,6 +16,10 @@ title: "E-Commerce"
 description: |
   An online retail business modeled end to end,
   from traffic to repeat purchasing.
+
+  **How this business is managed**
+  - **Marketing** — brings in shoppers who buy.
+  - **Finance** — reads [Orders · Order ID](./orders.md?field=order_id).
 type: "index"
 ---
 | Data Mart | Fields |
@@ -52,6 +56,18 @@ type: "OWOX Data Mart"
 |---|---|---|---|
 | \`order_id\` | STRING | Order ID | PK. Unique order |
 | \`customer_id\` | INTEGER | Customer ID | FK to [Customers](./customers.md) |
+
+## Calculated fields
+
+### \`orders_total\` · INTEGER · Metric
+
+- **Alias:** Orders
+
+Distinct orders.
+
+\`\`\`sql
+COUNT(DISTINCT order_id)
+\`\`\`
 
 ## Joins
 - [Customers](./customers.md) — \`customer_id = customer_id\`
@@ -251,5 +267,83 @@ describe('Import Model flow', () => {
 
     expect(await screen.findByText(/Could not check existing Data Marts: Forbidden/)).toBeInTheDocument();
     expect(screen.getByTestId('import-button')).toBeDisabled();
+  });
+
+  it('renders the model description as Markdown, with bundle links opening on GitHub', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
+    const overview = await screen.findByTestId('model-overview');
+
+    expect(within(overview).getByText('How this business is managed').tagName).toBe('STRONG');
+    expect(within(overview).getAllByRole('listitem').map(item => item.textContent)).toContain(
+      'Marketing — brings in shoppers who buy.',
+    );
+    expect(overview).not.toHaveTextContent('**');
+    expect(within(overview).getByRole('link', { name: 'Orders · Order ID' })).toHaveAttribute(
+      'href',
+      'https://github.com/OWOX/models/blob/main/bundles/e-commerce/orders.md',
+    );
+  });
+
+  it('counts calculated fields per Data Mart, queues them at import, and adds them once the Data Mart is connected', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
+    await screen.findByTestId('preview-screen');
+
+    expect(screen.getByTestId('calculated-orders')).toHaveTextContent('1');
+    expect(screen.getByTestId('calculated-customers')).toHaveTextContent('—');
+
+    fireEvent.change(screen.getByTestId('storage-select'), { target: { value: 'storage-bigquery' } });
+    await waitFor(() => expect(screen.getByTestId('import-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('import-button'));
+    expect(await screen.findByTestId('calculated-queued')).toHaveTextContent('1 calculated fields are waiting');
+
+    // Back on the start screen, the draft is not published yet: the section says where the fields
+    // came from and why they wait, and offers the way into the Data Mart.
+    fireEvent.click(screen.getByRole('button', { name: /Import another/ }));
+    const waiting = await screen.findByTestId('pending-calculated-fields');
+    const ordersId = [...sdk.__mock.marts.values()].find(mart => mart.title === 'Orders')!.id;
+    expect(waiting).toHaveTextContent('From the E-Commerce model · imported');
+    expect(screen.getByTestId('pending-explainer')).toHaveTextContent('published');
+    expect(screen.getByTestId(`pending-${ordersId}`)).toHaveTextContent('Waiting for publishing');
+    fireEvent.click(screen.getByTestId(`open-${ordersId}`));
+    await waitFor(() =>
+      expect(sdk.__mock.navigations).toContain(`/ui/demo-project/data-marts/${ordersId}/data-setup`),
+    );
+
+    // The member publishes it in ODM; the next check offers the button.
+    sdk.__mock.connectMarts();
+    fireEvent.click(within(waiting).getByTitle('Check again'));
+    expect(await screen.findByText('Ready to add')).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId(`add-${ordersId}`));
+
+    expect(await screen.findByTestId('pending-added')).toHaveTextContent('Added 1 to Orders');
+    expect(sdk.__mock.marts.get(ordersId)!.schema!.fields.map(field => field.name)).toContain('orders_total');
+  });
+
+  it('collapses the waiting list, and discards every waiting field after a confirmation', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /E-Commerce/ }));
+    await screen.findByTestId('preview-screen');
+    fireEvent.change(screen.getByTestId('storage-select'), { target: { value: 'storage-bigquery' } });
+    await waitFor(() => expect(screen.getByTestId('import-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('import-button'));
+    fireEvent.click(await screen.findByRole('button', { name: /Import another/ }));
+
+    await screen.findByTestId('pending-explainer');
+    expect(screen.getByTestId('pending-summary')).toHaveTextContent('1 in 1 Data Marts · 1 waiting for publishing');
+    fireEvent.click(screen.getByTestId('pending-toggle'));
+    expect(screen.queryByTestId('pending-explainer')).toBeNull();
+    expect(screen.getByTestId('pending-summary')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pending-toggle'));
+
+    fireEvent.click(screen.getByTestId('discard-all'));
+    expect(screen.getByTestId('discard-confirm-text')).toHaveTextContent('Discard all 1 waiting calculated fields?');
+    expect(sdk.__mock.documents.get('pendingCalculatedFields')!.size).toBe(1);
+    fireEvent.click(screen.getByTestId('discard-all-confirm'));
+
+    expect(await screen.findByTestId('pending-discarded')).toHaveTextContent('Discarded 1 waiting calculated fields.');
+    expect(sdk.__mock.documents.get('pendingCalculatedFields')!.size).toBe(0);
+    expect(sdk.__mock.marts.size).toBe(2);
   });
 });

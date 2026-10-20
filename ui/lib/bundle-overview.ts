@@ -9,7 +9,9 @@ import { firstImageSrc } from "./bundles";
 import { parseFrontmatter } from "./frontmatter";
 
 export interface BundleOverview {
-  /** Frontmatter `description`, rewrapped into paragraphs. */
+  /** Frontmatter `description`, as the Markdown the bundle wrote — lists, emphasis and links
+   *  intact. The Review screen renders it; flattening it here is what turned a bulleted list of
+   *  owners into one run-on paragraph full of literal `**` and `-`. */
   description?: string;
   /** Bullets under the `Example Questions` heading, in bundle order. */
   exampleQuestions: string[];
@@ -38,7 +40,7 @@ export function parseBundleOverview(
 ): BundleOverview | null {
   if (!indexMd) return null;
   const { data, body } = parseFrontmatter(indexMd);
-  const description = toParagraphs(typeof data.description === "string" ? data.description : "");
+  const description = (typeof data.description === "string" ? data.description : "").trim();
   const exampleQuestions = parseExampleQuestions(body);
   const imageUrl = firstImage(body, baseUrl);
 
@@ -95,24 +97,6 @@ function stripInlineMarkup(text: string): string {
     .replace(/\*\*/g, "")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-/**
- * A YAML block scalar keeps the source's hard wrapping, which would render as ragged
- * lines. Blank lines separate paragraphs; every other newline is just wrapping.
- */
-function toParagraphs(text: string): string {
-  return text
-    .split(/\n\s*\n/)
-    .map(paragraph =>
-      paragraph
-        .split("\n")
-        .map(line => line.trim())
-        .filter(Boolean)
-        .join(" "),
-    )
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 /** First `<img src>` or `![](…)` in the body, as an https URL. A relative path is
