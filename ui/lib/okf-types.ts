@@ -6,6 +6,21 @@ export interface SchemaField { name: string; type: string; pk: boolean; alias?: 
 export interface JoinKey { left: string; right: string; }
 
 /**
+ * A field ODM computes from a formula instead of reading from the warehouse — what an OKF bundle
+ * writes under `## Calculated fields`. Kept apart from `schema`: it is not a column, cannot be a
+ * join key or a primary key, and goes to ODM on a different schedule (see calculated-fields.ts).
+ */
+export interface CalculatedField {
+  name: string;
+  /** Portable OKF type, normalised like a column's. */
+  type: string;
+  alias?: string;
+  description?: string;
+  /** The formula as the bundle writes it: plain warehouse SQL, `alias.field` for joined marts. */
+  formula: string;
+}
+
+/**
  * A join node deeper than one hop: what the reporting column picker calls it, and what it
  * means from the mart that reaches it.
  *
@@ -32,6 +47,8 @@ export interface ModelNode {
   description?: string;
   definition?: string | null;   // optional source definition (SQL / table ref / view)
   schema: SchemaField[];
+  /** Calculated fields, in the order the bundle lists them. */
+  calculatedFields?: CalculatedField[];
   /** Join nodes below depth one, in the order the bundle lists them. */
   joinNodes?: JoinNode[];
   position: { x: number; y: number };
@@ -58,6 +75,11 @@ export interface ModelEdge {
   reverseDescription?: string;
   /** A display label for the target that the bundle wrote by hand (not just the mart title). */
   targetLabel?: string;
+  /** The relationship alias the bundle declared with `as \`alias\``. Formulas reach the target
+   *  through it (`purchases_e_commerce.line_revenue`), so it must be the alias ODM gets. */
+  alias?: string;
+  /** The same, for the other direction of a bidirectional edge. */
+  reverseAlias?: string;
   // Canvas-only hints for which ports the edge attaches to (not encoded in OKF).
   sourceHandle?: string | null;
   targetHandle?: string | null;

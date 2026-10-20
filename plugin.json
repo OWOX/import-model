@@ -1,8 +1,18 @@
 {
   "name": "Import Model",
-  "description": "Import public OKF bundles into OWOX Data Marts and create their schemas and relationships.",
+  "description": "Import public OKF bundles into OWOX Data Marts and create their schemas, relationships and calculated fields.",
   "delivery": {
     "type": "remote",
     "url": "https://owox.github.io/import-model/"
-  }
+  },
+  "collections": [
+    {
+      "name": "pendingCalculatedFields",
+      "scope": "project",
+      "entityBinding": {
+        "type": "data-mart",
+        "actions": { "read": "EDIT", "create": "EDIT", "update": "EDIT", "delete": "EDIT" }
+      }
+    }
+  ]
 }

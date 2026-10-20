@@ -85,6 +85,20 @@ export function bundleRawBase(input: string): string | undefined {
   }
 }
 
+/** The bundle folder as a github.com URL with a trailing slash, for opening the files a
+ *  description links relatively (`./purchases.md`). A person reads them there, rendered,
+ *  instead of as raw text. Undefined when the URL does not parse. */
+export function bundleBlobBase(input: string): string | undefined {
+  try {
+    const ref = parseGithubBundleUrl(input);
+    const dir = ref.kind === "file" ? ref.path.split("/").slice(0, -1).join("/") : ref.path;
+    const segs = [ref.owner, ref.repo, "blob", ref.ref, dir].filter(Boolean);
+    return `https://github.com/${segs.join("/")}/`;
+  } catch {
+    return undefined;
+  }
+}
+
 export const MAX_BUNDLE_FILES = 100;
 
 const NOT_FOUND = "Couldn't fetch. Make sure the repo is public and the URL points to an OKF bundle folder.";

@@ -13,8 +13,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@owox/plugin-sdk": "0.31.0",
-    "lucide-react": "^0.469.0"
+    "@owox/plugin-sdk": "0.39.0",
+    "lucide-react": "^0.469.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.4.0",

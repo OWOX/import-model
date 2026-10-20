@@ -9,6 +9,25 @@ The plugin:
 3. Lets an editor choose an existing ODM Storage and previews the objects to create.
 4. Creates draft Data Marts, descriptions, warehouse-specific schemas, and relationships through the ODM plugin API.
 5. Opens the native ODM Model Canvas, which renders the newly created Data Marts and links from backend state.
+6. Adds each Data Mart's calculated fields once it has an input source (see below).
+
+## Calculated fields
+
+ODM accepts a formula only over columns it has read from the warehouse (`CONNECTED`), and a
+column becomes connected only after the Data Mart has an input source. Imported Data Marts are
+drafts without one, so their calculated fields cannot be saved during the import.
+
+Instead the import stores each Data Mart's formulas in the plugin collection
+`pendingCalculatedFields`, bound to that Data Mart. Formulas are converted to ODM's stored form
+(`{{ref field="x"}}`, `{{ref path="alias.alias" field="x"}}`) at import time, using the
+relationship aliases the bundle declares (`- [Purchases](./purchases.md) as \`purchases_e_commerce\``).
+
+Whenever the plugin opens, its start screen lists the Data Marts whose calculated fields are still
+waiting, grouped by the model they were imported from, with the import date and a short note on why
+they wait. A published Data Mart with connected columns is **Ready to add** and gets an **Add**
+button; the others are **Waiting for publishing** (or name the columns still not connected) and get
+**Open Data Mart**. ODM refusals are kept per field with ODM's own reason. The section collapses, and
+**Discard all waiting fields** deletes every saved formula when the member no longer wants them.
 
 ## Credentials
 
@@ -22,6 +41,7 @@ The plugin has no credential settings and does not request or store a GitHub tok
 
 - Import is blocked when any Data Mart title from the bundle already exists in the selected Storage.
 - Imported Data Marts stay in draft because OKF bundles describe conceptual schemas, not executable SQL definitions.
+- Adding calculated fields sends the Data Mart's live schema back unchanged, with the formulas appended.
 - The import is not transactional. A failed API request is reported with the affected object; successfully created objects remain in ODM.
 - Model Canvas positions are not imported. ODM computes its native layout from the created Data Marts and relationships.
 - Only public GitHub bundles are accepted, with a maximum of 100 Markdown files per bundle.
@@ -37,6 +57,9 @@ npm run build      # writes the remote plugin to dist/
 ```
 
 Development uses the local SDK mock in `ui/sdk-mock.ts`. Production builds bundle the real `@owox/plugin-sdk`.
+The mock keeps ODM's field-status rule. To walk the calculated-fields flow locally, import a bundle,
+then run `__importModelMock.connectMarts()` in the browser console to give every Data Mart an input
+source and publish it, and press the refresh icon on the start screen.
 
 ## Deployment
 

@@ -38,8 +38,8 @@ describe("parseBundleOverview", () => {
     const overview = parseBundleOverview(SAAS_INDEX);
 
     expect(overview?.description).toBe(
-      "A B2B subscription software business modeled end to end — from the marketing that brings " +
-        "accounts in, through trials, subscriptions and seat expansion, to the product usage, " +
+      "A B2B subscription software business modeled end to end — from the marketing that brings\n" +
+        "accounts in, through trials, subscriptions and seat expansion, to the product usage,\n" +
         "support experience and billing that decide whether they stay.",
     );
     expect(overview?.exampleQuestions).toEqual([
@@ -54,16 +54,23 @@ describe("parseBundleOverview", () => {
     expect(overview?.exampleQuestions.some(q => q.includes("Explore"))).toBe(false);
   });
 
-  it("keeps blank-line paragraph breaks and drops source wrapping", () => {
+  it("keeps the description as Markdown, so its lists and emphasis can be rendered", () => {
     const overview = parseBundleOverview(`---
 description: |
   First paragraph, wrapped
   across two source lines.
 
-  Second paragraph.
+  **How this business is managed**
+  - **Marketing** — brings in shoppers who buy.
+  - **Finance** — see [Purchases](./purchases.md?field=line_net_revenue).
 ---
 `);
-    expect(overview?.description).toBe("First paragraph, wrapped across two source lines.\n\nSecond paragraph.");
+    expect(overview?.description).toBe(
+      "First paragraph, wrapped\nacross two source lines.\n\n" +
+        "**How this business is managed**\n" +
+        "- **Marketing** — brings in shoppers who buy.\n" +
+        "- **Finance** — see [Purchases](./purchases.md?field=line_net_revenue).",
+    );
   });
 
   it("returns what it has when parts are missing", () => {
