@@ -7,20 +7,38 @@
 export const VERIFIED_BUNDLES_INDEX_URL =
   "https://raw.githubusercontent.com/OWOX/models/main/bundles/index.md";
 
+/** "model" is an industry data model; "source" is what one OWOX connector loads. */
+export type BundleKind = "model" | "source";
+
 export interface VerifiedBundle {
   title: string;
+  /** Path under bundles/, without slashes at either end: "e-commerce", "sources/stripe". */
   folder: string;
   martCount: number | null;
+  kind: BundleKind;
 }
 
 /** Parse the top-level bundles/index.md. Each bundle is a markdown list link to
- *  a sub-folder index (`[Title](./folder/index.md) — N concept(s)`). External
- *  (http) links are skipped; the count is optional. */
+ *  a sub-folder index (`[Title](./folder/index.md) — N concept(s)`); the folder may
+ *  be nested (`./sources/stripe/index.md`). Links under a "Data sources" heading
+ *  are connector source models, the rest are industry models. External (http)
+ *  links and links that climb out of bundles/ are skipped; the count is optional. */
 export function parseBundlesIndex(md: string): VerifiedBundle[] {
-  const re = /\[([^\]]+)\]\(\s*\.\/([^/)]+)\/index\.md\s*\)(?:[^\n]*?(\d+)\s*concept)?/gi;
+  const link = /\[([^\]]+)\]\(\s*\.\/([^)\s]+?)\/index\.md\s*\)(?:[^\n]*?(\d+)\s*concept)?/gi;
   const out: VerifiedBundle[] = [];
-  for (let m = re.exec(md); m; m = re.exec(md)) {
-    out.push({ title: m[1].trim(), folder: m[2].trim(), martCount: m[3] ? Number(m[3]) : null });
+  let kind: BundleKind = "model";
+  for (const line of md.split("\n")) {
+    const heading = /^#{1,6}\s+(.+?)\s*$/.exec(line);
+    if (heading) {
+      kind = /^data sources$/i.test(heading[1]) ? "source" : "model";
+      continue;
+    }
+    link.lastIndex = 0;
+    for (let m = link.exec(line); m; m = link.exec(line)) {
+      const folder = m[2].trim();
+      if (folder.split("/").includes("..")) continue;
+      out.push({ title: m[1].trim(), folder, martCount: m[3] ? Number(m[3]) : null, kind });
+    }
   }
   return out;
 }
