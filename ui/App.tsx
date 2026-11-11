@@ -11,6 +11,7 @@ import {
   Github,
   Loader2,
   Network,
+  Plug,
   RefreshCw,
   Search,
   TableProperties,
@@ -62,6 +63,7 @@ export function App() {
   const [overview, setOverview] = useState<BundleOverview | null>(null);
   const [bundleLoading, setBundleLoading] = useState(false);
   const [bundleError, setBundleError] = useState('');
+  const [urlError, setUrlError] = useState('');
   const [storageId, setStorageId] = useState('');
   const [conflicts, setConflicts] = useState<string[]>([]);
   const [conflictsLoading, setConflictsLoading] = useState(false);
@@ -129,6 +131,8 @@ export function App() {
     if (!query) return bundles;
     return bundles.filter(bundle => bundle.title.toLocaleLowerCase().includes(query));
   }, [bundles, search]);
+  const industryModels = filteredBundles.filter(bundle => bundle.kind === 'model');
+  const sourceModels = filteredBundles.filter(bundle => bundle.kind === 'source');
 
   // Everything downstream — the counts, the conflict check and the import itself — reads the
   // member's selection, not the bundle. Deselecting a Data Mart takes its relationships with it.
@@ -182,9 +186,10 @@ export function App() {
     );
   }
 
-  async function loadBundle(name: string, url: string) {
+  async function loadBundle(name: string, url: string, origin: 'gallery' | 'url' = 'gallery') {
     setBundleLoading(true);
     setBundleError('');
+    setUrlError('');
     setSelectedName(name);
     setSelectedUrl(url);
     setOverview(null);
@@ -205,7 +210,7 @@ export function App() {
       setOverview(parseBundleOverview(files['index.md'], bundleRawBase(url)));
       setScreen('preview');
     } catch (error) {
-      setBundleError(errorMessage(error));
+      (origin === 'url' ? setUrlError : setBundleError)(errorMessage(error));
     } finally {
       setBundleLoading(false);
     }
@@ -297,34 +302,6 @@ export function App() {
         {screen === 'catalog' && (
           <section className='flex flex-col gap-5' data-testid='catalog-screen'>
             <PendingCalculatedFields />
-            <div className='dm-card flex flex-col gap-3'>
-              <div className='flex items-center gap-2'>
-                <Github className='h-5 w-5 text-muted-foreground' />
-                <div>
-                  <h2 className='font-semibold'>Import from a public GitHub bundle</h2>
-                  <p className='text-sm text-muted-foreground'>No GitHub credential is requested or stored.</p>
-                </div>
-              </div>
-              <div className='flex flex-col gap-2 sm:flex-row'>
-                <input
-                  type='url'
-                  className='h-10 min-w-0 flex-1 rounded-md border bg-card px-3 text-sm'
-                  value={customUrl}
-                  onChange={event => setCustomUrl(event.target.value)}
-                  placeholder='https://github.com/OWOX/models/tree/main/bundles/e-commerce'
-                  data-testid='custom-url'
-                />
-                <button
-                  className={buttonOutline}
-                  disabled={!customUrl.trim() || bundleLoading}
-                  onClick={() => void loadBundle('Custom bundle', customUrl.trim())}
-                >
-                  {bundleLoading ? <Loader2 className='h-4 w-4 animate-spin' /> : <ArrowRight className='h-4 w-4' />}
-                  Load URL
-                </button>
-              </div>
-            </div>
-
             <div className='flex items-center justify-between gap-3'>
               <div>
                 <h2 className='text-base font-semibold'>Verified models</h2>
@@ -345,30 +322,59 @@ export function App() {
               <LoadingLine text='Loading verified models and storages…' />
             ) : catalogError ? (
               <Banner kind='error'>{catalogError}</Banner>
+            ) : industryModels.length === 0 && sourceModels.length === 0 ? (
+              <p className='text-sm text-muted-foreground' data-testid='gallery-empty'>
+                {search.trim() ? `No models match “${search.trim()}”.` : 'The catalog is empty.'}
+              </p>
             ) : (
-              <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
-                {filteredBundles.map(bundle => (
-                  <button
-                    key={bundle.folder}
-                    className='dm-card flex min-h-28 flex-col items-start gap-3 text-left transition-colors hover:bg-accent'
-                    onClick={() => void loadBundle(bundle.title, bundleGithubUrl(bundle.folder))}
-                    disabled={bundleLoading}
-                    data-testid='bundle-card'
-                  >
-                    <div className='flex w-full items-start justify-between gap-3'>
-                      <Boxes className='h-5 w-5 text-primary' />
-                      <span className='rounded-full bg-card px-2 py-0.5 text-xs text-muted-foreground'>
-                        {bundle.martCount ?? '—'} marts
-                      </span>
-                    </div>
-                    <span className='font-semibold'>{bundle.title}</span>
-                    <span className='inline-flex items-center gap-1 text-xs text-muted-foreground'>
-                      OWOX/models <ArrowRight className='h-3 w-3' />
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <>
+                <BundleSection
+                  title='Industry Data Models'
+                  kind='model'
+                  bundles={industryModels}
+                  disabled={bundleLoading}
+                  onOpen={bundle => void loadBundle(bundle.title, bundleGithubUrl(bundle.folder))}
+                />
+                <BundleSection
+                  title='Sources'
+                  kind='source'
+                  bundles={sourceModels}
+                  disabled={bundleLoading}
+                  onOpen={bundle => void loadBundle(bundle.title, bundleGithubUrl(bundle.folder))}
+                />
+              </>
             )}
+
+            {/* A link to someone else's bundle is the less common path, so it sits below the
+                catalog. Its error shows here, beside the input, not at the top of the page. */}
+            <div className='dm-card flex flex-col gap-3'>
+              <div className='flex items-center gap-2'>
+                <Github className='h-5 w-5 text-muted-foreground' />
+                <div>
+                  <h2 className='font-semibold'>Import from a public GitHub bundle</h2>
+                  <p className='text-sm text-muted-foreground'>No GitHub credential is requested or stored.</p>
+                </div>
+              </div>
+              <div className='flex flex-col gap-2 sm:flex-row'>
+                <input
+                  type='url'
+                  className='h-10 min-w-0 flex-1 rounded-md border bg-card px-3 text-sm'
+                  value={customUrl}
+                  onChange={event => setCustomUrl(event.target.value)}
+                  placeholder='https://github.com/OWOX/models/tree/main/bundles/e-commerce'
+                  data-testid='custom-url'
+                />
+                <button
+                  className={buttonOutline}
+                  disabled={!customUrl.trim() || bundleLoading}
+                  onClick={() => void loadBundle('Custom bundle', customUrl.trim(), 'url')}
+                >
+                  {bundleLoading ? <Loader2 className='h-4 w-4 animate-spin' /> : <ArrowRight className='h-4 w-4' />}
+                  Load URL
+                </button>
+              </div>
+              {urlError && <Banner kind='error'>{urlError}</Banner>}
+            </div>
           </section>
         )}
 
@@ -597,6 +603,57 @@ export function App() {
         )}
       </main>
     </div>
+  );
+}
+
+/** One gallery section. Cards have a fixed height so the list shows two rows and the edge of
+ *  a third, and scrolls inside itself after that: a long Sources list must not push the industry models
+ *  (or anything below) out of sight. A section with nothing to show — a search that matched
+ *  only the other kind — is not drawn at all. */
+function BundleSection({
+  title,
+  kind,
+  bundles,
+  disabled,
+  onOpen,
+}: {
+  title: string;
+  kind: VerifiedBundle['kind'];
+  bundles: VerifiedBundle[];
+  disabled: boolean;
+  onOpen: (bundle: VerifiedBundle) => void;
+}) {
+  if (bundles.length === 0) return null;
+  const Icon = kind === 'source' ? Plug : Boxes;
+  return (
+    <section className='flex flex-col gap-2' data-testid={`gallery-section-${kind}`}>
+      <h3 className='flex items-baseline gap-2 text-sm font-semibold'>
+        {title} <span className='font-normal text-muted-foreground'>{bundles.length}</span>
+      </h3>
+      {/* Two rows plus the top ~20px of the third: 2 × h-16 cards + two gap-3 + 20px + p-1.
+          The cut-off third row is the cue that the list scrolls. A little inner padding keeps
+          the focus ring and hover edge from being clipped by the scroll container. */}
+      <div className='-m-1 max-h-[180px] overflow-y-auto p-1'>
+        <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
+          {bundles.map(bundle => (
+            <button
+              key={bundle.folder}
+              className='dm-card flex h-16 items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-accent'
+              onClick={() => onOpen(bundle)}
+              disabled={disabled}
+              title={bundle.title}
+              data-testid='bundle-card'
+            >
+              <Icon className='h-5 w-5 shrink-0 text-primary' />
+              <span className='line-clamp-2 min-w-0 flex-1 text-sm font-semibold'>{bundle.title}</span>
+              <span className='shrink-0 rounded-full bg-card px-2 py-0.5 text-xs text-muted-foreground'>
+                {bundle.martCount ?? '—'} marts
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 

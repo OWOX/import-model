@@ -9,6 +9,33 @@ title: "OKF Bundles"
 type: "index"
 ---
 - [E-Commerce](./e-commerce/index.md) — 2 concept(s)
+
+## Data sources
+
+- [Stripe](./sources/stripe/index.md) — 1 concept(s)
+`;
+
+// A source model's description names the industry-model marts it joins; those are not part of it.
+const STRIPE_INDEX = `---
+title: "Stripe"
+description: |
+  Customers join [Customers](../e-commerce/customers.md) on the ids you store.
+type: "index"
+---
+| Data Mart | Fields |
+|---|---|
+| [Charges](./charges.md) | 1 |
+`;
+
+const CHARGES = `---
+title: "Charges"
+description: "One row per charge attempt"
+type: "OWOX Data Mart"
+---
+# Schema
+| Column | Type | Alias | Description |
+|---|---|---|---|
+| \`id\` | STRING | ID | PK. Stripe object id |
 `;
 
 const BUNDLE_INDEX = `---
@@ -89,6 +116,8 @@ function installFetchMock() {
     if (url.endsWith('/bundles/e-commerce/index.md')) return new Response(BUNDLE_INDEX, { status: 200 });
     if (url.endsWith('/bundles/e-commerce/customers.md')) return new Response(CUSTOMERS, { status: 200 });
     if (url.endsWith('/bundles/e-commerce/orders.md')) return new Response(ORDERS, { status: 200 });
+    if (url.endsWith('/bundles/sources/stripe/index.md')) return new Response(STRIPE_INDEX, { status: 200 });
+    if (url.endsWith('/bundles/sources/stripe/charges.md')) return new Response(CHARGES, { status: 200 });
     if (url.endsWith('/bundles/bare/index.md')) return new Response(BARE_INDEX, { status: 200 });
     if (url.endsWith('/bundles/bare/customers.md')) return new Response(CUSTOMERS, { status: 200 });
     return new Response('not found', { status: 404 });
@@ -120,6 +149,52 @@ describe('Import Model flow', () => {
     expect(calls.filter(call => call.method === 'POST' && call.path === '/api/data-marts')).toHaveLength(2);
     expect(calls.filter(call => call.method === 'PUT' && call.path.endsWith('/schema'))).toHaveLength(2);
     expect(calls.filter(call => call.method === 'POST' && call.path.endsWith('/relationships'))).toHaveLength(1);
+  });
+
+  it('shows industry models and sources in their own sections, and search narrows both', async () => {
+    render(<App />);
+    const models = await screen.findByTestId('gallery-section-model');
+    const sources = screen.getByTestId('gallery-section-source');
+    expect(within(models).getByRole('heading', { name: /Industry Data Models/ })).toBeInTheDocument();
+    expect(within(models).getByRole('button', { name: /E-Commerce/ })).toBeInTheDocument();
+    expect(within(sources).getByRole('heading', { name: /Sources/ })).toBeInTheDocument();
+    expect(within(sources).getByRole('button', { name: /Stripe/ })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('Search models'), { target: { value: 'stri' } });
+    expect(screen.queryByTestId('gallery-section-model')).not.toBeInTheDocument();
+    expect(screen.getByTestId('gallery-section-source')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('Search models'), { target: { value: 'nothing' } });
+    expect(screen.getByTestId('gallery-empty')).toHaveTextContent('No models match');
+  });
+
+  it('shows a failed URL load beside the URL input, below the catalog', async () => {
+    render(<App />);
+    await screen.findByTestId('gallery-section-model');
+    const input = screen.getByTestId('custom-url');
+    fireEvent.change(input, { target: { value: 'https://github.com/OWOX/models/tree/main/bundles/missing' } });
+    fireEvent.click(screen.getByRole('button', { name: /Load URL/ }));
+
+    const card = input.closest('.dm-card') as HTMLElement;
+    expect(await within(card).findByText(/Couldn't fetch/)).toBeInTheDocument();
+    // The URL card comes after the gallery in the document.
+    const gallery = screen.getByTestId('gallery-section-source');
+    expect(gallery.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("imports a source model without the industry-model marts its description links to", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /Stripe/ }));
+    await screen.findByTestId('preview-screen');
+
+    fireEvent.change(screen.getByTestId('storage-select'), { target: { value: 'storage-bigquery' } });
+    await waitFor(() => expect(screen.getByTestId('import-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('import-button'));
+
+    await screen.findByTestId('complete-screen');
+    const created = sdk.__mock.requests.filter(call => call.method === 'POST' && call.path === '/api/data-marts');
+    expect(created).toHaveLength(1);
+    expect(JSON.stringify(created[0])).toContain('Charges');
   });
 
   it('imports only the Data Marts left checked, and skips the relationships that hang off the rest', async () => {

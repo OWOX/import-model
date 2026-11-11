@@ -104,14 +104,17 @@ export const MAX_BUNDLE_FILES = 100;
 const NOT_FOUND = "Couldn't fetch. Make sure the repo is public and the URL points to an OKF bundle folder.";
 
 /** Extract relative `.md` targets from a markdown body (the bundle index). Skips
- *  external (http/https) links, self-links to index.md, and anchors; strips a
- *  leading `./`; dedupes. */
+ *  external (http/https) links, self-links to index.md, anchors, and links that
+ *  climb out of the bundle folder (`../e-commerce/customers.md` — a source model's
+ *  description points at the industry models it joins, which are not part of it);
+ *  strips a leading `./`; dedupes. */
 export function extractMdLinks(indexMd: string): string[] {
   const re = /\]\(\s*([^)\s]+?\.md)(?:#[^)]*)?\s*\)/gi;
   const out = new Set<string>();
   for (let m = re.exec(indexMd); m; m = re.exec(indexMd)) {
     let p = m[1];
     if (/^https?:/i.test(p)) continue;
+    if (p.startsWith("/") || p.split("/").includes("..")) continue;
     p = p.replace(/^\.\//, "");
     if (p === "index.md") continue;
     out.add(p);
